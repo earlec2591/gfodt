@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Get Fit or Die Trying</title>
+<style>
+  /* ---------------------------------------------------------------
+     THEME
+     All colors live here as CSS variables. Change these to re-skin
+     the whole app. This is the same habit you'll use in real apps:
+     define tokens once, reference them everywhere.
+  ----------------------------------------------------------------*/
+  :root {
+    --bg:        #0f1411;
+    --surface:   #18201b;
+    --surface-2: #1f2922;
+    --line:      #2c3a30;
+    --text:      #e8efe9;
+    --muted:     #8ba293;
+    --accent:    #d4f24a;   /* electric lime */
+    --accent-dim:#9bb52e;
+    --gold:      #f2c84a;
+    --silver:    #c7d0cc;
+    --bronze:    #d49a5a;
+    --radius:    14px;
+    --font-display: 'Georgia', 'Times New Roman', serif;
+    --font-body:    -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    line-height: 1.6;
+    padding: 24px 16px 64px;
+    min-height: 100vh;
+  }
+
+  .wrap { max-width: 760px; margin: 0 auto; }
+
+  /* ---- Header ---- */
+  header { margin-bottom: 32px; }
+  .kicker {
+    font-size: 12px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent-dim);
+    font-weight: 600;
+  }
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(34px, 8vw, 52px);
+    font-weight: 700;
+    line-height: 1.05;
+    margin: 6px 0;
+    font-style: italic;
+  }
+  .sub { color: var(--muted); font-size: 15px; }
+
+  /* ---- Card shell ---- */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 22px;
+    margin-bottom: 24px;
+  }
+  .card h2 {
+    font-size: 13px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 18px;
+    font-weight: 600;
+  }
+
+  /* ---- Countdown banner ---- */
+  .countdown {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 22px;
+    margin-bottom: 24px;
+    text-align: center;
+  }
+  .cd-status {
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent-dim);
+    font-weight: 600;
+    margin-bottom: 14px;
+  }
+  .cd-clock {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+  }
+  .cd-unit {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 8px;
+    min-width: 66px;
+  }
+  .cd-num {
+    font-family: var(--font-display);
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--text);
+  }
+  .cd-label {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+  .cd-winner {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--gold);
+    line-height: 1.1;
+  }
+  .cd-winner small {
+    display: block;
+    font-family: var(--font-body);
+    font-style: normal;
+    font-size: 13px;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+    margin-top: 6px;
+    font-weight: 500;
+  }
+
+  /* ---- Form ---- */
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field.full { grid-column: 1 / -1; }
+  label {
+    font-size: 13px;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  input, select {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 9px;
+    padding: 11px 12px;
+    font-size: 15px;
+    font-family: inherit;
+  }
+  input:focus, select:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .check-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    padding: 11px 12px;
+  }
+  .check-row input { width: 18px; height: 18px; accent-color: var(--accent); }
+  .check-row label { color: var(--text); font-size: 15px; cursor: pointer; }
+
+  button.submit {
+    grid-column: 1 / -1;
+    margin-top: 6px;
+    background: var(--accent);
+    color: #0f1411;
+    border: none;
+    border-radius: 10px;
+    padding: 14px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.08s ease, background 0.2s ease;
+  }
+  button.submit:hover { background: #e2ff63; }
+  button.submit:active { transform: scale(0.985); }
+
+  /* ---- Leaderboard ---- */
+  .lb-controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .chip {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    border-radius: 20px;
+    padding: 7px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  .chip.active {
+    background: var(--accent);
+    color: #0f1411;
+    border-color: var(--accent);
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 38px 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  .row:last-child { border-bottom: none; }
+  .rank {
+    font-family: var(--font-display);
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--muted);
+    text-align: center;
+  }
+  .row.r1 .rank { color: var(--gold); }
+  .row.r2 .rank { color: var(--silver); }
+  .row.r3 .rank { color: var(--bronze); }
+  .who { font-weight: 600; font-size: 16px; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .score {
+    text-align: right;
+    font-family: var(--font-display);
+    font-size: 20px;
+    font-weight: 700;
+  }
+  .score small { display: block; font-size: 11px; color: var(--muted); font-family: var(--font-body); font-weight: 500; }
+
+  .empty { color: var(--muted); text-align: center; padding: 24px; font-size: 14px; }
+
+  @media (max-width: 520px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="kicker">friends &middot; fitness &middot; bragging rights</div>
+    <h1>Get Fit or Die Trying</h1>
+    <p class="sub">30 days. Log your day, climb the board, last one standing wins.</p>
+  </header>
+
+  <!-- ============ COUNTDOWN ============ -->
+  <section class="countdown" id="countdown">
+    <div class="cd-status" id="cdStatus">Loading…</div>
+    <div class="cd-clock" id="cdClock"></div>
+  </section>
+
+  <!-- ============ LOG FORM ============ -->
+  <section class="card">
+    <h2>Log today</h2>
+    <div class="grid">
+      <div class="field">
+        <label for="name">Who are you?</label>
+        <select id="name">
+          <option value="">Pick a name…</option>
+          <option>Alex</option>
+          <option>Sam</option>
+          <option>Jordan</option>
+          <option>Casey</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="date">Date</label>
+        <input type="date" id="date">
+      </div>
+
+      <div class="field">
+        <label for="workoutType">Workout type</label>
+        <select id="workoutType">
+          <option>Run</option>
+          <option>Walk</option>
+          <option>Hike</option>
+          <option>Lift</option>
+          <option>Cycle</option>
+          <option>Swim</option>
+          <option>Yoga</option>
+          <option>Pilates</option>
+          <option>Basketball</option>
+          <option>Soccer/footie</option>
+          <option>Football</option>
+          <option>Other</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="minutes">Workout minutes</label>
+        <input type="number" id="minutes" min="0" placeholder="e.g. 45">
+      </div>
+
+      <div class="field">
+        <label for="water">Water (oz)</label>
+        <input type="number" id="water" min="0" placeholder="e.g. 64">
+      </div>
+
+      <div class="field">
+        <label for="sleep">Sleep (hours)</label>
+        <input type="number" id="sleep" min="0" step="0.5" placeholder="e.g. 7.5">
+      </div>
+
+      <div class="field full">
+        <div class="check-row">
+          <input type="checkbox" id="steps">
+          <label for="steps">Hit 10,000 steps today</label>
+        </div>
+      </div>
+
+      <button class="submit" id="submitBtn">Submit entry</button>
+    </div>
+  </section>
+
+  <!-- ============ LEADERBOARD ============ -->
+  <section class="card">
+    <h2>Leaderboard</h2>
+    <div class="lb-controls" id="lbControls">
+      <span class="chip active" data-metric="overall">Overall</span>
+      <span class="chip" data-metric="minutes">Workout minutes</span>
+      <span class="chip" data-metric="water">Water</span>
+      <span class="chip" data-metric="sleep">Sleep</span>
+      <span class="chip" data-metric="steps">10k days</span>
+    </div>
+    <div id="board"></div>
+  </section>
+
+</div>
+
+<script>
+/* =================================================================
+   DATA LAYER
+   ------------------------------------------------------------------
+   Right now "the database" is just an array living in memory.
+   When we move to Supabase, ONLY this section changes: instead of
+   pushing to an array, you'll call supabase.from('entries').insert(),
+   and instead of reading the array you'll call .select(). The rest
+   of the app stays the same. That separation is the whole point.
+================================================================== */
+
+// Seed data so the leaderboard isn't empty on first open.
+let entries = [
+  { name: 'Alex',   date: '2026-06-01', workoutType: 'Run',  minutes: 50, water: 80, sleep: 7.5, steps: true },
+  { name: 'Sam',    date: '2026-06-01', workoutType: 'Lift', minutes: 65, water: 60, sleep: 6.0, steps: false },
+  { name: 'Jordan', date: '2026-06-01', workoutType: 'Cycle',minutes: 40, water: 100,sleep: 8.0, steps: true },
+];
+
+// "Write" one entry. (Future: replace body with a Supabase insert.)
+function addEntry(entry) {
+  entries.push(entry);
+}
+
+// "Read" and aggregate by person for a given metric.
+// (Future: you could do this aggregation in SQL instead.)
+
+// SCORING CONFIG — change the game here, never in the math below.
+// Each line says "how many points one unit of this category is worth".
+// "overall" sums every category into one fair score.
+const POINTS = {
+  perWorkoutMinute: 0.1,    // 10 min = 1 pt
+  perWaterOz:       0.0625, // 16 oz  = 1 pt
+  perSleepHour:     2,      // 1 hour = 2 pts
+  per10kDay:        5,      // 1 day  = 5 pts
+};
+
+function scoreEntry(e) {
+  return (Number(e.minutes) || 0) * POINTS.perWorkoutMinute
+       + (Number(e.water)   || 0) * POINTS.perWaterOz
+       + (Number(e.sleep)   || 0) * POINTS.perSleepHour
+       + (e.steps ? POINTS.per10kDay : 0);
+}
+
+function getStandings(metric) {
+  const totals = {}; // name -> running total
+
+  for (const e of entries) {
+    if (!totals[e.name]) totals[e.name] = 0;
+    if (metric === 'overall') {
+      totals[e.name] += scoreEntry(e);     // sum of all categories, in points
+    } else if (metric === 'steps') {
+      totals[e.name] += e.steps ? 1 : 0;   // count of 10k days
+    } else {
+      totals[e.name] += Number(e[metric]) || 0;
+    }
+  }
+
+  // Turn the object into a sorted array, highest first.
+  return Object.entries(totals)
+    .map(([name, total]) => ({ name, total: Math.round(total) }))
+    .sort((a, b) => b.total - a.total);
+}
+
+/* =================================================================
+   VIEW LAYER  (turning data into what you see on screen)
+================================================================== */
+
+let currentMetric = 'overall';
+
+const unitFor = {
+  overall: 'points',
+  minutes: 'minutes',
+  water:   'oz',
+  sleep:   'hours',
+  steps:   '10k days',
+};
+
+function renderBoard() {
+  const board = document.getElementById('board');
+  const standings = getStandings(currentMetric);
+
+  if (standings.length === 0) {
+    board.innerHTML = '<div class="empty">No entries yet. Be the first to log.</div>';
+    return;
+  }
+
+  board.innerHTML = standings.map((p, i) => {
+    const rank = i + 1;
+    return `
+      <div class="row r${rank}">
+        <div class="rank">${rank}</div>
+        <div>
+          <div class="who">${escapeHtml(p.name)}</div>
+          <div class="meta">${
+            currentMetric === 'steps' ? 'days at 10k+'
+            : currentMetric === 'overall' ? 'combined score'
+            : 'total this season'
+          }</div>
+        </div>
+        <div class="score">${p.total}<small>${unitFor[currentMetric]}</small></div>
+      </div>`;
+  }).join('');
+}
+
+// Tiny safety helper: never inject raw user text into HTML.
+// (A real SRE habit — untrusted input gets escaped.)
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+/* =================================================================
+   COUNTDOWN  (the timed competition)
+   ------------------------------------------------------------------
+   Two date gotchas worth understanding, because time bugs are some
+   of the most common (and embarrassing) in real systems:
+
+   1. Months are ZERO-indexed in JavaScript. June is month 5, not 6.
+      This trips up nearly everyone exactly once.
+   2. A bare "2026-06-07" is parsed as UTC midnight, which can land
+      on the previous evening in US time zones. Writing the date with
+      explicit local parts (year, month, day) avoids that drift.
+
+   Everything about the competition window lives in this config.
+================================================================== */
+
+const COMPETITION = {
+  start: new Date(2026, 5, 7, 0, 0, 0),  // June 7 2026, local midnight (month 5 = June)
+  durationDays: 30,
+};
+// End = start + 30 days. Computed, not hand-typed, so the two can never disagree.
+COMPETITION.end = new Date(COMPETITION.start.getTime() + COMPETITION.durationDays * 24 * 60 * 60 * 1000);
+
+// Break a millisecond gap into days / hours / minutes / seconds.
+function breakdown(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return {
+    days:    Math.floor(s / 86400),
+    hours:   Math.floor((s % 86400) / 3600),
+    minutes: Math.floor((s % 3600) / 60),
+    seconds: s % 60,
+  };
+}
+
+function clockHtml(b) {
+  const unit = (n, label) =>
+    `<div class="cd-unit"><div class="cd-num">${String(n).padStart(2,'0')}</div><div class="cd-label">${label}</div></div>`;
+  return unit(b.days,'days') + unit(b.hours,'hrs') + unit(b.minutes,'min') + unit(b.seconds,'sec');
+}
+
+function renderCountdown() {
+  const now = new Date();
+  const status = document.getElementById('cdStatus');
+  const clock  = document.getElementById('cdClock');
+
+  if (now < COMPETITION.start) {
+    // Before kickoff: count down to the start.
+    status.textContent = 'Competition starts in';
+    clock.innerHTML = clockHtml(breakdown(COMPETITION.start - now));
+  } else if (now < COMPETITION.end) {
+    // Live: count down to the finish.
+    status.textContent = 'Time left to compete';
+    clock.innerHTML = clockHtml(breakdown(COMPETITION.end - now));
+  } else {
+    // Over: freeze and crown the Overall leader.
+    const standings = getStandings('overall');
+    const champ = standings[0];
+    status.textContent = 'Competition complete';
+    clock.innerHTML = champ
+      ? `<div class="cd-winner">${escapeHtml(champ.name)} wins<small>${champ.total} points overall</small></div>`
+      : `<div class="cd-winner">No winner<small>nobody logged anything</small></div>`;
+    return true; // signal: we can stop ticking
+  }
+  return false;
+}
+
+/* =================================================================
+   WIRING  (connecting buttons to functions)
+================================================================== */
+
+// Default the date input to today.
+document.getElementById('date').valueAsDate = new Date();
+
+// Handle metric chip clicks.
+document.getElementById('lbControls').addEventListener('click', (e) => {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  currentMetric = chip.dataset.metric;
+  document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  renderBoard();
+});
+
+// Handle form submission.
+document.getElementById('submitBtn').addEventListener('click', () => {
+  const name = document.getElementById('name').value;
+  if (!name) { alert('Pick a name first.'); return; }
+
+  addEntry({
+    name,
+    date:        document.getElementById('date').value,
+    workoutType: document.getElementById('workoutType').value,
+    minutes:     Number(document.getElementById('minutes').value) || 0,
+    water:       Number(document.getElementById('water').value) || 0,
+    sleep:       Number(document.getElementById('sleep').value) || 0,
+    steps:       document.getElementById('steps').checked,
+  });
+
+  // Reset the numeric fields for the next entry.
+  document.getElementById('minutes').value = '';
+  document.getElementById('water').value = '';
+  document.getElementById('sleep').value = '';
+  document.getElementById('steps').checked = false;
+
+  renderBoard();
+});
+
+// First paint.
+renderBoard();
+
+// Start the countdown and tick once a second.
+// We keep the timer id so we can stop it cleanly when the competition ends
+// (leaving timers running forever is a classic small resource leak).
+const tick = setInterval(() => {
+  const finished = renderCountdown();
+  if (finished) clearInterval(tick);
+}, 1000);
+renderCountdown(); // paint immediately, don't wait the first second
+</script>
+</body>
+</html>
