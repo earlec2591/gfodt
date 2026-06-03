@@ -291,17 +291,25 @@
   /* ---- Activity feed ---- */
   .feed-row {
     display: flex;
-    justify-content: space-between;
     align-items: baseline;
     gap: 12px;
     padding: 11px 0;
     border-bottom: 1px solid var(--line);
     font-size: 14px;
+    text-align: left;
   }
   .feed-row:last-child { border-bottom: none; }
+  .feed-main { flex: 1; min-width: 0; }          /* who + what, takes available space */
   .feed-who { font-weight: 600; }
   .feed-what { color: var(--muted); }
   .feed-when { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .feed-points {
+    color: var(--accent);
+    font-weight: 700;
+    white-space: nowrap;
+    font-family: var(--font-display);
+  }
+  .feed-points small { font-family: var(--font-body); font-weight: 500; color: var(--muted); font-size: 11px; }
 
   /* ---- Inline unit selector ---- */
   .unit-select {
@@ -387,7 +395,6 @@
      with edge-justification, so we re-center them explicitly so nothing
      looks lopsided. */
   .lb-controls { justify-content: center; }
-  .feed-row,
   .score-row { justify-content: center; gap: 8px; }
   .badge-row { justify-content: center; }
   .form .field, .field { text-align: center; }
@@ -958,10 +965,15 @@ function renderFeed() {
     }
     if (e.sleep)   bits.push(`${e.sleep}h sleep`);
     const what = bits.join(' · ') || 'logged a day';
+    const pts = Math.round(scoreEntry(e));   // points earned by this single entry
     return `
       <div class="feed-row">
-        <span><span class="feed-who">${escapeHtml(e.name)}</span> <span class="feed-what">${what}</span></span>
-        <span class="feed-when">${timeAgo(e.createdAt)}</span>
+        <span class="feed-main">
+          <span class="feed-who">${escapeHtml(e.name)}</span>
+          <span class="feed-what">${what}</span>
+          <span class="feed-when">· ${timeAgo(e.createdAt)}</span>
+        </span>
+        <span class="feed-points">+${pts}<small> pts</small></span>
       </div>`;
   }).join('');
 }
