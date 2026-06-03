@@ -338,6 +338,22 @@
   }
   .bd-total span:last-child { color: var(--accent); }
 
+  /* ---- Weight (private) ---- */
+  .priv-note { color: var(--muted); font-size: 11px; font-weight: 400; font-style: italic; }
+  .weight-summary {
+    display: flex;
+    justify-content: space-around;
+    margin-bottom: 16px;
+    text-align: center;
+  }
+  .weight-summary .ws-num { font-family: var(--font-display); font-size: 24px; font-weight: 700; }
+  .weight-summary .ws-lab { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .weight-chart { width: 100%; height: auto; }
+  .weight-chart .line { fill: none; stroke: var(--accent); stroke-width: 2; }
+  .weight-chart .dot { fill: var(--accent); }
+  .weight-chart .axis { stroke: var(--line); stroke-width: 1; }
+  .weight-chart .lbl { fill: var(--muted); font-size: 10px; font-family: var(--font-body); }
+
   /* ---- Inline unit selector ---- */
   .unit-select {
     background: var(--surface-2);
@@ -527,8 +543,25 @@
         <input type="number" id="steps" min="0" step="1" placeholder="e.g. 12000">
       </div>
 
+      <div class="field full">
+        <label for="weight">Weight 🔒 <span class="priv-note">private — only you see this</span>
+          <select id="weightUnitSelect" class="unit-select">
+            <option value="lb">lb</option>
+            <option value="kg">kg</option>
+            <option value="stone">stone</option>
+          </select>
+        </label>
+        <input type="number" id="weight" min="0" step="any" placeholder="optional">
+      </div>
+
       <button class="submit" id="submitBtn">Submit entry</button>
     </div>
+  </section>
+
+  <!-- ============ MY WEIGHT (private, only the logged-in user) ============ -->
+  <section class="card" id="weightCard">
+    <h2>My weight 🔒</h2>
+    <div id="weightTrend"></div>
   </section>
 
   <!-- ============ HOW POINTS WORK ============ -->
@@ -627,6 +660,7 @@ function kgToWeight(kg) { return UNITS.weight[userUnits.weight].fromKg(Number(kg
 
 // A tidy display string, e.g. "1.5 litres" or "64 oz".
 function waterLabel() { return UNITS.water[userUnits.water].label; }
+function weightLabel() { return UNITS.weight[userUnits.weight].label; }
 
 // PROFILE: read this user's chosen username AND unit preferences.
 // Returns the username string, or null if they haven't picked one yet.
@@ -686,13 +720,19 @@ async function addEntry(entry) {
   await loadEntries();   // refresh the cache so the board updates
 }
 
+// The current user's private weight rows: { 'YYYY-MM-DD': weight_kg }.
+// Only ever holds the logged-in user's own data (RLS guarantees this).
+let myWeights = {};
+
 // READ all entries from the database into our local cache. Also pulls
-// everyone's usernames so the board shows chosen names, not email prefixes.
+// everyone's usernames so the board shows chosen names, not email prefixes,
+// plus the current user's own private weights.
 async function loadEntries() {
-  // Fetch entries and profiles in parallel — two independent reads.
-  const [entriesRes, profilesRes] = await Promise.all([
+  // Fetch entries, profiles, and (private) my-weights in parallel.
+  const [entriesRes, profilesRes, weightsRes] = await Promise.all([
     db.from('entries').select('*'),
     db.from('profiles').select('id, username'),
+    db.from('weights').select('entry_date, weight_kg'),   // RLS returns only mine
   ]);
 
   if (entriesRes.error) { console.error('Load failed:', entriesRes.error.message); return; }
@@ -700,6 +740,10 @@ async function loadEntries() {
   // Build a quick lookup: user_id -> username.
   const nameById = {};
   for (const p of (profilesRes.data || [])) nameById[p.id] = p.username;
+
+  // Store my weights keyed by date, and note which dates I logged weight.
+  myWeights = {};
+  for (const w of (weightsRes.data || [])) myWeights[w.entry_date] = Number(w.weight_kg);
 
   entries = (entriesRes.data || []).map(row => ({
     // Prefer the chosen username; fall back to email prefix if none set yet.
@@ -713,9 +757,25 @@ async function loadEntries() {
     steps:       row.steps,        // raw step count (number)
     createdAt:   row.created_at,
     updatedAt:   row.updated_at || row.created_at,   // when last logged/changed
+    // Public flag: did this person log weight that day? (The number stays private.)
+    // Using a shared flag keeps everyone's score consistent across viewers.
+    loggedWeight: !!row.logged_weight,
   }));
 
   renderAll();
+}
+
+// SAVE my weight for a given date (private). Stores canonical kg.
+async function saveMyWeight(dateStr, displayValue) {
+  if (!currentUser) return 'Not logged in';
+  const kg = weightToKg(displayValue);
+  if (!(kg > 0)) return 'Enter a valid weight';
+  const { error } = await db.from('weights').upsert({
+    user_id:    currentUser.id,
+    entry_date: dateStr,
+    weight_kg:  kg,
+  }, { onConflict: 'user_id,entry_date' });
+  return error ? error.message : null;
 }
 
 // SCORING CONFIG — change the game here, never in the math below.
@@ -726,6 +786,7 @@ const POINTS = {
   perSleepHour:     2,        // 1 hour = 2 pts
   stepsBase:        5,        // points for reaching 10,000 steps
   stepsPerExtra5k:  2,        // bonus points for each full 5,000 beyond 10k
+  weightLogged:     3,        // points for logging weight that day (the HABIT, not the number)
 };
 
 // Steps points: 0 under 10k; 5 at 10k; +2 for each full 5k above 10k.
@@ -741,7 +802,8 @@ function scoreEntry(e) {
   return (Number(e.minutes) || 0) * POINTS.perWorkoutMinute
        + (Number(e.water)   || 0) * POINTS.perWaterMl      // water stored in ml
        + (Number(e.sleep)   || 0) * POINTS.perSleepHour
-       + stepsPoints(e.steps);
+       + stepsPoints(e.steps)
+       + (e.loggedWeight ? POINTS.weightLogged : 0);       // habit points, not the number
 }
 
 // Break one entry's score into its parts, for the feed's click-to-expand view.
@@ -752,6 +814,7 @@ function scoreBreakdown(e) {
     { label: 'Water',   pts: (Number(e.water)   || 0) * POINTS.perWaterMl },
     { label: 'Sleep',   pts: (Number(e.sleep)   || 0) * POINTS.perSleepHour },
     { label: 'Steps',   pts: stepsPoints(e.steps) },
+    { label: 'Weight logged', pts: e.loggedWeight ? POINTS.weightLogged : 0 },
   ];
   // Round each and keep only the categories that actually earned points.
   return parts
@@ -958,6 +1021,7 @@ function renderScoring() {
     { what: 'Water',        pts: `1 point per ${userUnitsPerPoint} ${waterLabel()}` },
     { what: 'Sleep',        pts: `${POINTS.perSleepHour} points per hour` },
     { what: 'Steps',        pts: `${POINTS.stepsBase} pts at 10k, +${POINTS.stepsPerExtra5k} per extra 5k` },
+    { what: 'Logging weight', pts: `${POINTS.weightLogged} points for logging (private)` },
   ];
 
   el.innerHTML = rows.map(r => `
@@ -966,7 +1030,7 @@ function renderScoring() {
       <span class="score-pts">${escapeHtml(r.pts)}</span>
     </div>`).join('')
     + `<div class="score-note">Your <strong>Overall</strong> rank adds up points from every category.
-       The other tabs rank by a single category on its own.</div>`;
+       Weight is private — you get points just for logging it, never for the number.</div>`;
 }
 
 // Show the superlative badges.
@@ -1047,6 +1111,65 @@ function renderAll() {
   renderBoard();
   renderBadges();
   renderFeed();
+  renderWeight();
+}
+
+// Render the private weight section: a summary plus a hand-drawn SVG trend line.
+// Reads only from myWeights, which (via RLS) only ever contains the user's own data.
+function renderWeight() {
+  const el = document.getElementById('weightTrend');
+  if (!el) return;
+
+  // Turn the {date: kg} map into a sorted array of points.
+  const points = Object.entries(myWeights)
+    .map(([date, kg]) => ({ date, value: kgToWeight(kg) }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  if (points.length === 0) {
+    el.innerHTML = '<div class="empty">Log your weight above to start tracking. Only you can see this.</div>';
+    return;
+  }
+
+  const unit = weightLabel();
+  const round1 = (n) => Math.round(n * 10) / 10;
+  const latest = points[points.length - 1].value;
+  const first = points[0].value;
+  const change = round1(latest - first);
+  const changeStr = points.length > 1
+    ? (change === 0 ? 'no change' : (change > 0 ? '+' : '') + change + ' ' + unit)
+    : '—';
+
+  // Summary row.
+  let html = `
+    <div class="weight-summary">
+      <div><div class="ws-num">${round1(latest)}</div><div class="ws-lab">current ${unit}</div></div>
+      <div><div class="ws-num">${changeStr}</div><div class="ws-lab">since start</div></div>
+      <div><div class="ws-num">${points.length}</div><div class="ws-lab">days logged</div></div>
+    </div>`;
+
+  // Draw the line chart (only meaningful with 2+ points).
+  if (points.length >= 2) {
+    const W = 320, H = 120, pad = 24;
+    const vals = points.map(p => p.value);
+    const min = Math.min(...vals), max = Math.max(...vals);
+    const range = (max - min) || 1;   // avoid divide-by-zero if all equal
+    const x = (i) => pad + (i / (points.length - 1)) * (W - pad * 2);
+    const y = (v) => pad + (1 - (v - min) / range) * (H - pad * 2);
+
+    const linePts = points.map((p, i) => `${x(i)},${y(p.value)}`).join(' ');
+    const dots = points.map((p, i) => `<circle class="dot" cx="${x(i)}" cy="${y(p.value)}" r="3"/>`).join('');
+
+    html += `
+      <svg class="weight-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+        <line class="axis" x1="${pad}" y1="${H - pad}" x2="${W - pad}" y2="${H - pad}"/>
+        <polyline class="line" points="${linePts}"/>
+        ${dots}
+        <text class="lbl" x="${pad}" y="${pad - 8}">${round1(max)} ${unit}</text>
+        <text class="lbl" x="${pad}" y="${H - pad + 14}">${round1(min)} ${unit}</text>
+      </svg>`;
+  }
+
+  el.innerHTML = html;
 }
 
 // Tiny safety helper: never inject raw user text into HTML.
@@ -1165,14 +1288,24 @@ document.getElementById('waterUnitSelect').addEventListener('change', async (e) 
   if (currentUser) await saveMyUnits(currentUser);  // persist the choice
 });
 
+// Change weight unit: update preference, save it, refresh the private chart.
+document.getElementById('weightUnitSelect').addEventListener('change', async (e) => {
+  userUnits.weight = e.target.value;
+  renderWeight();    // chart + summary reconvert to the new unit
+  if (currentUser) await saveMyUnits(currentUser);
+});
+
 // Handle form submission. Now async because saving hits the network.
 document.getElementById('submitBtn').addEventListener('click', async () => {
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;                 // prevent double-submit while saving
   btn.textContent = 'Saving…';
 
+  const dateStr = document.getElementById('date').value;
+
+  // Save the shared daily entry.
   await addEntry({
-    date:        document.getElementById('date').value,
+    date:        dateStr,
     workoutType: document.getElementById('workoutType').value,
     minutes:     Number(document.getElementById('minutes').value) || 0,
     waterMl:     waterToMl(document.getElementById('water').value),  // convert to canonical ml
@@ -1180,11 +1313,24 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
     steps:       Number(document.getElementById('steps').value) || 0,
   });
 
+  // If a weight was entered, save it PRIVATELY to the separate weights table,
+  // and set a PUBLIC flag on the shared entry so weight-habit points are
+  // consistent for everyone (the flag reveals only THAT you logged, not the number).
+  const weightVal = document.getElementById('weight').value;
+  if (weightVal !== '' && Number(weightVal) > 0) {
+    const err = await saveMyWeight(dateStr, weightVal);
+    if (err) alert('Weight not saved: ' + err);
+    await db.from('entries').update({ logged_weight: true })
+      .eq('user_id', currentUser.id).eq('entry_date', dateStr);
+    await loadEntries();   // reload so the chart and habit points update
+  }
+
   // Reset the numeric fields for the next entry.
   document.getElementById('minutes').value = '';
   document.getElementById('water').value = '';
   document.getElementById('sleep').value = '';
   document.getElementById('steps').value = '';
+  document.getElementById('weight').value = '';
 
   btn.disabled = false;
   btn.textContent = 'Submit entry';
@@ -1259,6 +1405,7 @@ function enterApp(user, username) {
   document.getElementById('whoami').textContent = 'Logged in as ' + username;
   // Reflect the user's saved water unit in the selector.
   document.getElementById('waterUnitSelect').value = userUnits.water;
+  document.getElementById('weightUnitSelect').value = userUnits.weight;
   renderScoring();        // scoring text depends on the user's unit
   showScreen('app');
   loadEntries();          // pull everyone's data from the database
