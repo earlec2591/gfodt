@@ -250,12 +250,93 @@
   @media (max-width: 520px) {
     .grid { grid-template-columns: 1fr; }
   }
+
+  /* ---- Login gate ---- */
+  #app { display: none; }              /* hidden until logged in */
+  .gate {
+    max-width: 420px;
+    margin: 8vh auto 0;
+    text-align: center;
+  }
+  .gate h1 {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: clamp(32px, 9vw, 48px);
+    margin-bottom: 8px;
+  }
+  .gate p { color: var(--muted); margin-bottom: 24px; }
+  .gate input {
+    width: 100%;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 10px;
+    padding: 14px;
+    font-size: 16px;
+    margin-bottom: 12px;
+  }
+  .gate input:focus { outline: none; border-color: var(--accent); }
+  .gate button {
+    width: 100%;
+    background: var(--accent);
+    color: #0f1411;
+    border: none;
+    border-radius: 10px;
+    padding: 14px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .gate .msg { margin-top: 16px; font-size: 14px; color: var(--accent-dim); min-height: 20px; }
+  .signout {
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .whoami { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; }
+  .whoami span { color: var(--muted); font-size: 14px; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 <div class="wrap">
 
+  <!-- ============ CHECKING STATE (shown while we verify login) ============ -->
+  <div class="gate" id="checking">
+    <h1>Get Fit or Die Trying</h1>
+    <p>Loading…</p>
+  </div>
+
+  <!-- ============ LOGIN GATE (shown when logged out) ============ -->
+  <div class="gate" id="gate" style="display:none">
+    <h1>Get Fit or Die Trying</h1>
+    <p>Enter your email and we'll send you a one-tap login link. No password to remember.</p>
+    <input type="email" id="emailInput" placeholder="you@example.com" autocomplete="email">
+    <button id="loginBtn">Send my login link</button>
+    <div class="msg" id="gateMsg"></div>
+  </div>
+
+  <!-- ============ USERNAME PICKER (shown after first login) ============ -->
+  <div class="gate" id="usernameGate" style="display:none">
+    <h1>Pick your name</h1>
+    <p>This is how you'll show up on the leaderboard. Choose wisely — trash talk depends on it.</p>
+    <input type="text" id="usernameInput" placeholder="e.g. SpeedDemon" maxlength="24" autocomplete="off">
+    <button id="usernameBtn">Save my name</button>
+    <div class="msg" id="usernameMsg"></div>
+  </div>
+
+  <!-- ============ APP (shown when logged in) ============ -->
+  <div id="app">
+
   <header>
+    <div class="whoami">
+      <span id="whoami"></span>
+      <button class="signout" id="signoutBtn">Sign out</button>
+    </div>
     <div class="kicker">friends &middot; fitness &middot; bragging rights</div>
     <h1>Get Fit or Die Trying</h1>
     <p class="sub">30 days. Log your day, climb the board, last one standing wins.</p>
@@ -271,17 +352,6 @@
   <section class="card">
     <h2>Log today</h2>
     <div class="grid">
-      <div class="field">
-        <label for="name">Who are you?</label>
-        <select id="name">
-          <option value="">Pick a name…</option>
-          <option>Alex</option>
-          <option>Sam</option>
-          <option>Jordan</option>
-          <option>Casey</option>
-        </select>
-      </div>
-
       <div class="field">
         <label for="date">Date</label>
         <input type="date" id="date">
@@ -344,33 +414,106 @@
     <div id="board"></div>
   </section>
 
+  </div><!-- /#app -->
 </div>
 
 <script>
 /* =================================================================
-   DATA LAYER
+   DATA LAYER  (now backed by Supabase)
    ------------------------------------------------------------------
-   Right now "the database" is just an array living in memory.
-   When we move to Supabase, ONLY this section changes: instead of
-   pushing to an array, you'll call supabase.from('entries').insert(),
-   and instead of reading the array you'll call .select(). The rest
-   of the app stays the same. That separation is the whole point.
+   This is the ONLY section that changed when we moved off the
+   in-memory array. The view, countdown, and scoring code below are
+   untouched — that's the payoff of keeping layers separate.
+
+   Two config values below identify your project. The anon key is
+   PUBLIC by design: your Row Level Security policies are what keep
+   the data safe, not the secrecy of this key.
 ================================================================== */
 
-// Seed data so the leaderboard isn't empty on first open.
-let entries = [
-  { name: 'Alex',   date: '2026-06-01', workoutType: 'Run',  minutes: 50, water: 80, sleep: 7.5, steps: true },
-  { name: 'Sam',    date: '2026-06-01', workoutType: 'Lift', minutes: 65, water: 60, sleep: 6.0, steps: false },
-  { name: 'Jordan', date: '2026-06-01', workoutType: 'Cycle',minutes: 40, water: 100,sleep: 8.0, steps: true },
-];
+const SUPABASE_URL = 'https://ufbmmojvnophsmocwaio.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVmYm1tb2p2bm9waHNtb2N3YWlvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0Mjk5NzksImV4cCI6MjA5NjAwNTk3OX0.JoY_rXQFfkAsXPRGdWYD3TQfZhy02x5y6UhcNrVpdgA';
 
-// "Write" one entry. (Future: replace body with a Supabase insert.)
-function addEntry(entry) {
-  entries.push(entry);
+const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Local cache of entries, refilled from the database whenever data changes.
+// The view layer reads from this; the database is the source of truth.
+let entries = [];
+
+// Turn an email into a friendly display name: "alex@gmail.com" -> "alex".
+function nameFromEmail(email) {
+  return (email || '').split('@')[0] || 'someone';
 }
 
-// "Read" and aggregate by person for a given metric.
-// (Future: you could do this aggregation in SQL instead.)
+// PROFILE: read this user's chosen username from the profiles table.
+// Returns the username string, or null if they haven't picked one yet.
+async function getMyUsername(user) {
+  const { data, error } = await db
+    .from('profiles')
+    .select('username')
+    .eq('id', user.id)
+    .maybeSingle();          // returns one row or null, never throws on "no row"
+  if (error) { console.error('Profile read failed:', error.message); return null; }
+  return data ? data.username : null;
+}
+
+// PROFILE: save (or update) this user's username.
+async function saveMyUsername(user, username) {
+  const { error } = await db
+    .from('profiles')
+    .upsert({ id: user.id, username });   // insert, or update if the row exists
+  return error;   // null means success
+}
+
+// WRITE one entry to the database (was: entries.push).
+// Async because it's a network call — it takes real time, unlike memory.
+async function addEntry(entry) {
+  const { data: { user } } = await db.auth.getUser();
+  if (!user) { alert('Please log in again.'); return; }
+
+  // Map our friendly field names to the database column names.
+  const { error } = await db.from('entries').insert({
+    user_id:      user.id,
+    email:        user.email,
+    entry_date:   entry.date,
+    workout_type: entry.workoutType,
+    minutes:      entry.minutes,
+    water_oz:     entry.water,
+    sleep_hours:  entry.sleep,
+    hit_10k:      entry.steps,
+  });
+
+  if (error) { alert('Could not save: ' + error.message); return; }
+  await loadEntries();   // refresh the cache so the board updates
+}
+
+// READ all entries from the database into our local cache. Also pulls
+// everyone's usernames so the board shows chosen names, not email prefixes.
+async function loadEntries() {
+  // Fetch entries and profiles in parallel — two independent reads.
+  const [entriesRes, profilesRes] = await Promise.all([
+    db.from('entries').select('*'),
+    db.from('profiles').select('id, username'),
+  ]);
+
+  if (entriesRes.error) { console.error('Load failed:', entriesRes.error.message); return; }
+
+  // Build a quick lookup: user_id -> username.
+  const nameById = {};
+  for (const p of (profilesRes.data || [])) nameById[p.id] = p.username;
+
+  entries = (entriesRes.data || []).map(row => ({
+    // Prefer the chosen username; fall back to email prefix if none set yet.
+    name:        nameById[row.user_id] || nameFromEmail(row.email),
+    date:        row.entry_date,
+    workoutType: row.workout_type,
+    minutes:     row.minutes,
+    water:       row.water_oz,
+    sleep:       row.sleep_hours,
+    steps:       row.hit_10k,
+  }));
+
+  renderBoard();
+}
 
 // SCORING CONFIG — change the game here, never in the math below.
 // Each line says "how many points one unit of this category is worth".
@@ -540,13 +683,13 @@ document.getElementById('lbControls').addEventListener('click', (e) => {
   renderBoard();
 });
 
-// Handle form submission.
-document.getElementById('submitBtn').addEventListener('click', () => {
-  const name = document.getElementById('name').value;
-  if (!name) { alert('Pick a name first.'); return; }
+// Handle form submission. Now async because saving hits the network.
+document.getElementById('submitBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true;                 // prevent double-submit while saving
+  btn.textContent = 'Saving…';
 
-  addEntry({
-    name,
+  await addEntry({
     date:        document.getElementById('date').value,
     workoutType: document.getElementById('workoutType').value,
     minutes:     Number(document.getElementById('minutes').value) || 0,
@@ -561,11 +704,103 @@ document.getElementById('submitBtn').addEventListener('click', () => {
   document.getElementById('sleep').value = '';
   document.getElementById('steps').checked = false;
 
-  renderBoard();
+  btn.disabled = false;
+  btn.textContent = 'Submit entry';
 });
 
-// First paint.
-renderBoard();
+/* =================================================================
+   AUTH FLOW  (magic link login)
+   ------------------------------------------------------------------
+   How magic link works: the user types their email, we ask Supabase
+   to email them a one-time link. Clicking it returns them here already
+   logged in. No passwords exist anywhere — nothing to leak or forget.
+================================================================== */
+
+const checkingEl = document.getElementById('checking');
+const gate       = document.getElementById('gate');
+const usernameGate = document.getElementById('usernameGate');
+const appEl      = document.getElementById('app');
+
+// Helper: show exactly ONE of the four screens, hide the rest.
+// Centralizing this is what prevents the "two things visible at once" bug.
+function showScreen(which) {
+  checkingEl.style.display   = which === 'checking' ? 'block' : 'none';
+  gate.style.display         = which === 'gate'     ? 'block' : 'none';
+  usernameGate.style.display = which === 'username' ? 'block' : 'none';
+  appEl.style.display        = which === 'app'      ? 'block' : 'none';
+}
+
+// Send the login link.
+document.getElementById('loginBtn').addEventListener('click', async () => {
+  const email = document.getElementById('emailInput').value.trim();
+  const msg = document.getElementById('gateMsg');
+  if (!email) { msg.textContent = 'Enter your email first.'; return; }
+
+  msg.textContent = 'Sending…';
+  const { error } = await db.auth.signInWithOtp({
+    email,
+    options: { emailRedirectTo: window.location.href }, // come back to this same page
+  });
+
+  msg.textContent = error
+    ? 'Something went wrong: ' + error.message
+    : 'Check your email for the login link.';
+});
+
+// Save a chosen username, then enter the app.
+document.getElementById('usernameBtn').addEventListener('click', async () => {
+  const msg = document.getElementById('usernameMsg');
+  const name = document.getElementById('usernameInput').value.trim();
+  if (name.length < 2) { msg.textContent = 'Pick at least 2 characters.'; return; }
+
+  const { data: { user } } = await db.auth.getUser();
+  if (!user) { showScreen('gate'); return; }
+
+  msg.textContent = 'Saving…';
+  const error = await saveMyUsername(user, name);
+  if (error) { msg.textContent = 'Could not save: ' + error.message; return; }
+
+  enterApp(user, name);   // straight into the app with the new name
+});
+
+// Sign out.
+document.getElementById('signoutBtn').addEventListener('click', async () => {
+  await db.auth.signOut();
+});
+
+// Show the app for a logged-in user with a known username.
+function enterApp(user, username) {
+  document.getElementById('whoami').textContent = 'Logged in as ' + username;
+  showScreen('app');
+  loadEntries();          // pull everyone's data from the database
+}
+
+// The single decision point: given a session (or none), pick the right screen.
+// Runs on load AND on every auth change (login, logout, link click).
+async function route(session) {
+  if (!session) { showScreen('gate'); return; }   // not logged in → login form
+
+  const user = session.user;
+  const username = await getMyUsername(user);      // do they have a name yet?
+  if (username) {
+    enterApp(user, username);                      // yes → app
+  } else {
+    showScreen('username');                        // no → pick-a-name screen
+  }
+}
+
+// Start in the 'checking' state so NOTHING sensitive shows until we know
+// the login status. Then check the session and route accordingly.
+showScreen('checking');
+db.auth.getSession().then(({ data }) => route(data.session));
+db.auth.onAuthStateChange((_event, session) => route(session));
+
+/* =================================================================
+   STARTUP  (things that run no matter the login state)
+================================================================== */
+
+// Default the date input to today.
+document.getElementById('date').valueAsDate = new Date();
 
 // Start the countdown and tick once a second.
 // We keep the timer id so we can stop it cleanly when the competition ends
