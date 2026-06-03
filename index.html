@@ -303,6 +303,18 @@
   .feed-what { color: var(--muted); }
   .feed-when { color: var(--muted); font-size: 12px; white-space: nowrap; }
 
+  /* ---- Inline unit selector ---- */
+  .unit-select {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--accent);
+    border-radius: 6px;
+    padding: 1px 4px;
+    font-size: 12px;
+    font-family: inherit;
+    margin-left: 4px;
+  }
+
   /* ---- How points work ---- */
   .score-row {
     display: flex;
@@ -462,8 +474,13 @@
       </div>
 
       <div class="field">
-        <label for="water">Water (oz)</label>
-        <input type="number" id="water" min="0" placeholder="e.g. 64">
+        <label for="water">Water
+          <select id="waterUnitSelect" class="unit-select">
+            <option value="oz">oz</option>
+            <option value="litres">litres</option>
+          </select>
+        </label>
+        <input type="number" id="water" min="0" step="any" placeholder="e.g. 64">
       </div>
 
       <div class="field">
@@ -471,11 +488,9 @@
         <input type="number" id="sleep" min="0" step="0.5" placeholder="e.g. 7.5">
       </div>
 
-      <div class="field full">
-        <div class="check-row">
-          <input type="checkbox" id="steps">
-          <label for="steps">Hit 10,000 steps today</label>
-        </div>
+      <div class="field">
+        <label for="steps">Steps</label>
+        <input type="number" id="steps" min="0" step="1" placeholder="e.g. 12000">
       </div>
 
       <button class="submit" id="submitBtn">Submit entry</button>
@@ -543,16 +558,67 @@ function nameFromEmail(email) {
   return (email || '').split('@')[0] || 'someone';
 }
 
-// PROFILE: read this user's chosen username from the profiles table.
+/* =================================================================
+   UNITS  (store one canonical unit, convert only for display)
+   ------------------------------------------------------------------
+   The database always stores water in MILLILITERS and weight in
+   KILOGRAMS — one source of truth. Each user picks a display unit;
+   we convert on the way in (their unit -> canonical) and on the way
+   out (canonical -> their unit). This avoids the classic bug of not
+   knowing whether a stored "64" meant ounces or milliliters.
+================================================================== */
+
+const UNITS = {
+  water: {
+    oz:     { label: 'oz',     toMl: 29.5735,  fromMl: (ml) => ml / 29.5735 },
+    litres: { label: 'litres', toMl: 1000,     fromMl: (ml) => ml / 1000 },
+  },
+  weight: {
+    lb:    { label: 'lb',    toKg: 0.453592, fromKg: (kg) => kg / 0.453592 },
+    kg:    { label: 'kg',    toKg: 1,        fromKg: (kg) => kg },
+    stone: { label: 'stone', toKg: 6.35029,  fromKg: (kg) => kg / 6.35029 },
+  },
+};
+
+// The current user's chosen units (filled in after login). Defaults are safe.
+let userUnits = { water: 'oz', weight: 'lb' };
+
+// Convert a value the user typed (in their unit) into canonical storage units.
+function waterToMl(value)  { return Math.round((Number(value) || 0) * UNITS.water[userUnits.water].toMl); }
+function weightToKg(value) { return (Number(value) || 0) * UNITS.weight[userUnits.weight].toKg; }
+
+// Convert canonical storage units back into the user's unit for display.
+function mlToWater(ml)  { return UNITS.water[userUnits.water].fromMl(Number(ml) || 0); }
+function kgToWeight(kg) { return UNITS.weight[userUnits.weight].fromKg(Number(kg) || 0); }
+
+// A tidy display string, e.g. "1.5 litres" or "64 oz".
+function waterLabel() { return UNITS.water[userUnits.water].label; }
+
+// PROFILE: read this user's chosen username AND unit preferences.
 // Returns the username string, or null if they haven't picked one yet.
+// Also sets the global userUnits so all conversions use their choice.
 async function getMyUsername(user) {
   const { data, error } = await db
     .from('profiles')
-    .select('username')
+    .select('username, water_unit, weight_unit')
     .eq('id', user.id)
     .maybeSingle();          // returns one row or null, never throws on "no row"
   if (error) { console.error('Profile read failed:', error.message); return null; }
+  if (data) {
+    if (data.water_unit)  userUnits.water  = data.water_unit;
+    if (data.weight_unit) userUnits.weight = data.weight_unit;
+  }
   return data ? data.username : null;
+}
+
+// PROFILE: save the user's unit preferences.
+async function saveMyUnits(user) {
+  const { error } = await db.from('profiles').upsert({
+    id: user.id,
+    water_unit:  userUnits.water,
+    weight_unit: userUnits.weight,
+  });
+  return error;
 }
 
 // PROFILE: save (or update) this user's username.
@@ -576,9 +642,10 @@ async function addEntry(entry) {
     entry_date:   entry.date,
     workout_type: entry.workoutType,
     minutes:      entry.minutes,
-    water_oz:     entry.water,
+    water_ml:     entry.waterMl,      // already converted to canonical ml
     sleep_hours:  entry.sleep,
-    hit_10k:      entry.steps,
+    steps:        entry.steps,        // raw step count (number)
+    hit_10k:      (Number(entry.steps) || 0) >= 10000,  // keep old column in sync
   }, { onConflict: 'user_id,entry_date' });   // match the DB's unique constraint
 
   if (error) { alert('Could not save: ' + error.message); return; }
@@ -607,9 +674,9 @@ async function loadEntries() {
     date:        row.entry_date,
     workoutType: row.workout_type,
     minutes:     row.minutes,
-    water:       row.water_oz,
+    water:       row.water_ml,     // canonical ml (convert for display)
     sleep:       row.sleep_hours,
-    steps:       row.hit_10k,
+    steps:       row.steps,        // raw step count (number)
     createdAt:   row.created_at,
   }));
 
@@ -617,20 +684,29 @@ async function loadEntries() {
 }
 
 // SCORING CONFIG — change the game here, never in the math below.
-// Each line says "how many points one unit of this category is worth".
 // "overall" sums every category into one fair score.
 const POINTS = {
-  perWorkoutMinute: 0.1,    // 10 min = 1 pt
-  perWaterOz:       0.0625, // 16 oz  = 1 pt
-  perSleepHour:     2,      // 1 hour = 2 pts
-  per10kDay:        5,      // 1 day  = 5 pts
+  perWorkoutMinute: 0.1,      // 10 min = 1 pt
+  perWaterMl:       0.0021,   // ~473 ml (16 oz) = 1 pt  (keeps old water scoring)
+  perSleepHour:     2,        // 1 hour = 2 pts
+  stepsBase:        5,        // points for reaching 10,000 steps
+  stepsPerExtra5k:  2,        // bonus points for each full 5,000 beyond 10k
 };
+
+// Steps points: 0 under 10k; 5 at 10k; +2 for each full 5k above 10k.
+// e.g. 10k→5, 15k→7, 20k→9, 22k→9 (only full 5k blocks count).
+function stepsPoints(steps) {
+  const s = Number(steps) || 0;
+  if (s < 10000) return 0;
+  const extraBlocks = Math.floor((s - 10000) / 5000);
+  return POINTS.stepsBase + extraBlocks * POINTS.stepsPerExtra5k;
+}
 
 function scoreEntry(e) {
   return (Number(e.minutes) || 0) * POINTS.perWorkoutMinute
-       + (Number(e.water)   || 0) * POINTS.perWaterOz
+       + (Number(e.water)   || 0) * POINTS.perWaterMl      // water stored in ml
        + (Number(e.sleep)   || 0) * POINTS.perSleepHour
-       + (e.steps ? POINTS.per10kDay : 0);
+       + stepsPoints(e.steps);
 }
 
 function getStandings(metric) {
@@ -641,7 +717,7 @@ function getStandings(metric) {
     if (metric === 'overall') {
       totals[e.name] += scoreEntry(e);     // sum of all categories, in points
     } else if (metric === 'steps') {
-      totals[e.name] += e.steps ? 1 : 0;   // count of 10k days
+      totals[e.name] += Number(e.steps) || 0;   // total steps
     } else {
       totals[e.name] += Number(e[metric]) || 0;
     }
@@ -683,7 +759,8 @@ function getStreak(name) {
 }
 
 /* ---- PER-PERSON STATS ----
-   Everything about one person, for the tap-to-expand detail view. */
+   Everything about one person, for the tap-to-expand detail view.
+   Water is kept in canonical ml here; convert to the user's unit at display. */
 function getPersonStats(name) {
   const mine = entries.filter(e => e.name === name);
   const sum = (f) => mine.reduce((t, e) => t + (Number(e[f]) || 0), 0);
@@ -691,9 +768,10 @@ function getPersonStats(name) {
     name,
     entryCount: mine.length,
     minutes:    sum('minutes'),
-    water:      sum('water'),
+    waterMl:    sum('water'),                       // canonical ml
     sleep:      sum('sleep'),
-    tenKDays:   mine.filter(e => e.steps).length,
+    steps:      sum('steps'),                        // total steps
+    tenKDays:   mine.filter(e => (Number(e.steps) || 0) >= 10000).length,
     streak:     getStreak(name),
     points:     Math.round(mine.reduce((t, e) => t + scoreEntry(e), 0)),
   };
@@ -717,16 +795,16 @@ function getBadges() {
   };
 
   const grind = leaderBy(s => s.minutes);
-  pushIf('🏋️', 'Grinder (most minutes)', grind, grind && grind.minutes);
+  pushIf('🏋️', 'Big Dawg (most minutes)', grind, grind && grind.minutes);
 
-  const hydro = leaderBy(s => s.water);
-  pushIf('💧', 'Hydration Hero (most water)', hydro, hydro && hydro.water);
+  const hydro = leaderBy(s => s.waterMl);
+  pushIf('💧', 'Hydration Hero (most water)', hydro, hydro && hydro.waterMl);
 
   const sleeper = leaderBy(s => s.sleep);
   pushIf('😴', 'Well Rested (most sleep)', sleeper, sleeper && sleeper.sleep);
 
-  const stepper = leaderBy(s => s.tenKDays);
-  pushIf('👟', 'Step Master (most 10k days)', stepper, stepper && stepper.tenKDays);
+  const stepper = leaderBy(s => s.steps);
+  pushIf('👟', 'Step Master (most steps)', stepper, stepper && stepper.steps);
 
   const streaker = leaderBy(s => s.streak);
   pushIf('🔥', 'On Fire (longest streak)', streaker, streaker && streaker.streak);
@@ -740,13 +818,26 @@ function getBadges() {
 
 let currentMetric = 'overall';
 
-const unitFor = {
-  overall: 'points',
-  minutes: 'minutes',
-  water:   'oz',
-  sleep:   'hours',
-  steps:   '10k days',
-};
+// Unit label for each metric. Water is dynamic (depends on user's choice).
+function unitFor(metric) {
+  return {
+    overall: 'points',
+    minutes: 'minutes',
+    water:   waterLabel(),
+    sleep:   'hours',
+    steps:   'steps',
+  }[metric];
+}
+
+// Format a standings total for display. Water totals are stored in ml and
+// must be converted to the user's unit; everything else is shown as-is.
+function displayTotal(metric, total) {
+  if (metric === 'water') {
+    const v = mlToWater(total);
+    return v >= 100 ? Math.round(v) : Math.round(v * 10) / 10;  // 1 decimal for litres
+  }
+  return total;
+}
 
 // Tracks which person's row is expanded (null = none).
 let expandedName = null;
@@ -765,7 +856,7 @@ function renderBoard() {
     const streak = getStreak(p.name);
     const flame = streak > 1 ? `<span class="streak">🔥 ${streak}</span>` : '';
     const metaText =
-      currentMetric === 'steps' ? 'days at 10k+'
+      currentMetric === 'steps' ? 'total steps'
       : currentMetric === 'overall' ? 'combined score'
       : 'total this season';
 
@@ -773,14 +864,15 @@ function renderBoard() {
     let detail = '';
     if (expandedName === p.name) {
       const s = getPersonStats(p.name);
+      const waterDisp = displayTotal('water', s.waterMl);
       detail = `
         <div class="person-stats">
           <div class="stat-grid">
             <div><div class="s-num">${s.points}</div><div class="s-lab">points</div></div>
             <div><div class="s-num">${s.minutes}</div><div class="s-lab">minutes</div></div>
-            <div><div class="s-num">${s.water}</div><div class="s-lab">oz water</div></div>
+            <div><div class="s-num">${waterDisp}</div><div class="s-lab">${waterLabel()} water</div></div>
             <div><div class="s-num">${s.sleep}</div><div class="s-lab">hrs sleep</div></div>
-            <div><div class="s-num">${s.tenKDays}</div><div class="s-lab">10k days</div></div>
+            <div><div class="s-num">${s.steps.toLocaleString()}</div><div class="s-lab">total steps</div></div>
             <div><div class="s-num">${s.streak}</div><div class="s-lab">day streak</div></div>
           </div>
         </div>`;
@@ -793,7 +885,7 @@ function renderBoard() {
           <div class="who">${escapeHtml(p.name)} ${flame}</div>
           <div class="meta">${metaText} · tap for stats</div>
         </div>
-        <div class="score">${p.total}<small>${unitFor[currentMetric]}</small></div>
+        <div class="score">${displayTotal(currentMetric, p.total).toLocaleString()}<small>${unitFor(currentMetric)}</small></div>
       </div>
       ${detail}`;
   }).join('');
@@ -805,17 +897,16 @@ function renderScoring() {
   const el = document.getElementById('scoring');
   if (!el) return;
 
-  // Convert each "points per unit" into a friendly "1 point per N units".
-  const per = (pointsPerUnit, unit) => {
-    const unitsForOnePoint = Math.round(1 / pointsPerUnit);
-    return `1 point per ${unitsForOnePoint} ${unit}`;
-  };
+  // Water: express the rate in the user's chosen unit.
+  // perWaterMl points per ml -> how many of THEIR units earn 1 point.
+  const mlPerUserUnit = UNITS.water[userUnits.water].toMl;
+  const userUnitsPerPoint = Math.round((1 / POINTS.perWaterMl) / mlPerUserUnit * 10) / 10;
 
   const rows = [
-    { what: 'Workout time', pts: per(POINTS.perWorkoutMinute, 'minutes') },
-    { what: 'Water',        pts: per(POINTS.perWaterOz, 'oz') },
+    { what: 'Workout time', pts: `1 point per ${Math.round(1 / POINTS.perWorkoutMinute)} minutes` },
+    { what: 'Water',        pts: `1 point per ${userUnitsPerPoint} ${waterLabel()}` },
     { what: 'Sleep',        pts: `${POINTS.perSleepHour} points per hour` },
-    { what: 'Hit 10k steps',pts: `${POINTS.per10kDay} points for the day` },
+    { what: 'Steps',        pts: `${POINTS.stepsBase} pts at 10k, +${POINTS.stepsPerExtra5k} per extra 5k` },
   ];
 
   el.innerHTML = rows.map(r => `
@@ -859,8 +950,12 @@ function renderFeed() {
   el.innerHTML = recent.map(e => {
     const bits = [];
     if (e.minutes) bits.push(`${e.minutes}m ${escapeHtml(e.workoutType || 'workout')}`);
-    if (e.steps)   bits.push('hit 10k');
-    if (e.water)   bits.push(`${e.water}oz water`);
+    if (Number(e.steps) > 0) bits.push(`${Number(e.steps).toLocaleString()} steps`);
+    if (e.water) {
+      const w = mlToWater(e.water);
+      const wDisp = w >= 100 ? Math.round(w) : Math.round(w * 10) / 10;
+      bits.push(`${wDisp}${waterLabel()} water`);
+    }
     if (e.sleep)   bits.push(`${e.sleep}h sleep`);
     const what = bits.join(' · ') || 'logged a day';
     return `
@@ -986,6 +1081,14 @@ document.getElementById('board').addEventListener('click', (e) => {
   renderBoard();
 });
 
+// Change water unit: update preference, save it, and refresh all displays.
+document.getElementById('waterUnitSelect').addEventListener('change', async (e) => {
+  userUnits.water = e.target.value;
+  renderScoring();   // scoring text shows the new unit
+  renderAll();       // board, feed, stats reconvert to the new unit
+  if (currentUser) await saveMyUnits(currentUser);  // persist the choice
+});
+
 // Handle form submission. Now async because saving hits the network.
 document.getElementById('submitBtn').addEventListener('click', async () => {
   const btn = document.getElementById('submitBtn');
@@ -996,16 +1099,16 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
     date:        document.getElementById('date').value,
     workoutType: document.getElementById('workoutType').value,
     minutes:     Number(document.getElementById('minutes').value) || 0,
-    water:       Number(document.getElementById('water').value) || 0,
+    waterMl:     waterToMl(document.getElementById('water').value),  // convert to canonical ml
     sleep:       Number(document.getElementById('sleep').value) || 0,
-    steps:       document.getElementById('steps').checked,
+    steps:       Number(document.getElementById('steps').value) || 0,
   });
 
   // Reset the numeric fields for the next entry.
   document.getElementById('minutes').value = '';
   document.getElementById('water').value = '';
   document.getElementById('sleep').value = '';
-  document.getElementById('steps').checked = false;
+  document.getElementById('steps').value = '';
 
   btn.disabled = false;
   btn.textContent = 'Submit entry';
@@ -1071,9 +1174,16 @@ document.getElementById('signoutBtn').addEventListener('click', async () => {
   await db.auth.signOut();
 });
 
+// Holds the logged-in user so handlers (like unit changes) can save prefs.
+let currentUser = null;
+
 // Show the app for a logged-in user with a known username.
 function enterApp(user, username) {
+  currentUser = user;
   document.getElementById('whoami').textContent = 'Logged in as ' + username;
+  // Reflect the user's saved water unit in the selector.
+  document.getElementById('waterUnitSelect').value = userUnits.water;
+  renderScoring();        // scoring text depends on the user's unit
   showScreen('app');
   loadEntries();          // pull everyone's data from the database
 }
