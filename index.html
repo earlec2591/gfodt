@@ -354,6 +354,41 @@
   .weight-chart .axis { stroke: var(--line); stroke-width: 1; }
   .weight-chart .lbl { fill: var(--muted); font-size: 10px; font-family: var(--font-body); }
 
+  /* ---- Rank movement ---- */
+  .rank-move { font-size: 11px; font-weight: 700; font-family: var(--font-body); }
+  .rank-move.up   { color: #4ade80; }
+  .rank-move.down { color: #f87171; }
+  .rank-move.same { color: var(--muted); }
+  .rank-move.new  { color: var(--accent); font-size: 9px; }
+
+  /* ---- Chat wall ---- */
+  .chat-input-row { display: flex; gap: 8px; margin-bottom: 4px; }
+  .chat-input-row input { flex: 1; }
+  .chat-input-row button {
+    background: var(--accent); color: #0d1117; border: none;
+    border-radius: 9px; padding: 0 16px; font-weight: 700; cursor: pointer;
+  }
+  .chat-count { font-size: 11px; color: var(--muted); margin-bottom: 14px; text-align: right; }
+  .chat-msg {
+    padding: 9px 0; border-bottom: 1px solid var(--line);
+    font-size: 14px; text-align: left;
+    display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
+  }
+  .chat-msg:last-child { border-bottom: none; }
+  .chat-msg .cm-who { font-weight: 600; color: var(--accent); }
+  .chat-msg .cm-body { color: var(--text); }
+  .chat-msg .cm-del { color: var(--muted); cursor: pointer; font-size: 12px; white-space: nowrap; }
+
+  /* ---- Nudge ---- */
+  .nudge-pending { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+  .nudge-btn {
+    background: var(--surface-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 20px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+  }
+  .nudge-btn:hover { border-color: var(--accent); }
+  .nudge-note { font-size: 13px; color: var(--muted); padding: 6px 0; border-bottom: 1px solid var(--line); text-align: left; }
+  .nudge-note:last-child { border-bottom: none; }
+
   /* ---- Inline unit selector ---- */
   .unit-select {
     background: var(--surface-2);
@@ -555,6 +590,7 @@
       </div>
 
       <button class="submit" id="submitBtn">Submit entry</button>
+      <button class="submit" id="deleteBtn" style="display:none; background:transparent; border:1px solid var(--line); color:var(--muted);">Delete this day's entry</button>
     </div>
   </section>
 
@@ -593,6 +629,24 @@
   <section class="card">
     <h2>Recent activity</h2>
     <div id="feed"></div>
+  </section>
+
+  <!-- ============ NUDGE ============ -->
+  <section class="card">
+    <h2>Nudge</h2>
+    <div id="nudgeArea"></div>
+    <div id="nudgeFeed"></div>
+  </section>
+
+  <!-- ============ CHAT WALL ============ -->
+  <section class="card">
+    <h2>Trash talk</h2>
+    <div class="chat-input-row">
+      <input type="text" id="chatInput" maxlength="280" placeholder="Say something…">
+      <button id="chatSend">Post</button>
+    </div>
+    <div id="chatCount" class="chat-count"></div>
+    <div id="chat"></div>
   </section>
 
   </div><!-- /#app -->
@@ -704,6 +758,9 @@ async function addEntry(entry) {
   const { data: { user } } = await db.auth.getUser();
   if (!user) { alert('Please log in again.'); return; }
 
+  // Backstop: never accept a future date, even if the input cap is bypassed.
+  if (entry.date > todayStr()) { alert("You can't log a future date."); return; }
+
   const { error } = await db.from('entries').upsert({
     user_id:      user.id,
     email:        user.email,
@@ -778,12 +835,79 @@ async function saveMyWeight(dateStr, displayValue) {
   return error ? error.message : null;
 }
 
+// Max length for a chat message. One place to change it.
+const MAX_MESSAGE_LEN = 280;
+
+// Caches for chat and nudges, refilled on load.
+let messages = [];
+let nudges = [];
+
+// CHAT: load recent messages and nudges (newest first).
+async function loadSocial() {
+  const [msgRes, nudgeRes] = await Promise.all([
+    db.from('messages').select('*').order('created_at', { ascending: false }).limit(50),
+    db.from('nudges').select('*').order('created_at', { ascending: false }).limit(20),
+  ]);
+  messages = msgRes.data || [];
+  nudges   = nudgeRes.data || [];
+  renderChat();
+  renderNudges();
+}
+
+// CHAT: post a message (trimmed and length-capped).
+async function postMessage(body, username) {
+  if (!currentUser) return 'Not logged in';
+  const text = (body || '').trim().slice(0, MAX_MESSAGE_LEN);
+  if (!text) return 'Empty message';
+  const { error } = await db.from('messages').insert({
+    user_id: currentUser.id, username, body: text,
+  });
+  if (error) return error.message;
+  await loadSocial();
+  return null;
+}
+
+// CHAT: delete one of my own messages.
+async function deleteMessage(id) {
+  if (!currentUser) return;
+  await db.from('messages').delete().eq('id', id).eq('user_id', currentUser.id);
+  await loadSocial();
+}
+
+// NUDGE: record a visible "X nudged Y" note.
+async function sendNudge(fromName, toName) {
+  if (!currentUser) return;
+  await db.from('nudges').insert({ from_name: fromName, to_name: toName });
+  await loadSocial();
+}
+
+// Whether an entry is still editable: until the END of the day AFTER its date,
+// in the user's local time. So a Monday entry locks at end of Tuesday.
+function entryEditable(dateStr) {
+  // Parse the entry date as a local date, add 2 days to get the lock moment
+  // (end of the next day = start of the day after next).
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const lockAt = new Date(y, m - 1, d + 2, 0, 0, 0);  // local midnight, 2 days later
+  return new Date() < lockAt;
+}
+
+// DELETE my entry for a date (only if within the edit window).
+async function deleteEntry(dateStr) {
+  if (!currentUser) return 'Not logged in';
+  if (!entryEditable(dateStr)) return 'That entry is locked (past the edit window).';
+  // Remove the shared entry and any private weight for that day.
+  await db.from('entries').delete().eq('user_id', currentUser.id).eq('entry_date', dateStr);
+  await db.from('weights').delete().eq('user_id', currentUser.id).eq('entry_date', dateStr);
+  await loadEntries();
+  return null;
+}
+
 // SCORING CONFIG — change the game here, never in the math below.
 // "overall" sums every category into one fair score.
 const POINTS = {
   perWorkoutMinute: 0.1,      // 10 min = 1 pt
   perWaterMl:       0.0021,   // ~473 ml (16 oz) = 1 pt  (keeps old water scoring)
-  perSleepHour:     2,        // 1 hour = 2 pts
+  perSleepHour:     1,        // 1 hour = 1 pt
   stepsBase:        5,        // points for reaching 10,000 steps
   stepsPerExtra5k:  2,        // bonus points for each full 5,000 beyond 10k
   weightLogged:     3,        // points for logging weight that day (the HABIT, not the number)
@@ -822,10 +946,11 @@ function scoreBreakdown(e) {
     .filter(p => p.pts > 0);
 }
 
-function getStandings(metric) {
+function getStandings(metric, upToDate) {
   const totals = {}; // name -> running total
 
   for (const e of entries) {
+    if (upToDate && e.date > upToDate) continue;   // ignore entries after the cutoff
     if (!totals[e.name]) totals[e.name] = 0;
     if (metric === 'overall') {
       totals[e.name] += scoreEntry(e);     // sum of all categories, in points
@@ -840,6 +965,35 @@ function getStandings(metric) {
   return Object.entries(totals)
     .map(([name, total]) => ({ name, total: Math.round(total) }))
     .sort((a, b) => b.total - a.total);
+}
+
+/* ---- RANK MOVEMENT ----
+   How each person's OVERALL rank changed since yesterday. We compute standings
+   through yesterday and through today (from the dated entries we already have),
+   then compare positions. No historical storage needed — it's derived. */
+function getRankMovement() {
+  const today = todayStr();
+  // Yesterday's date string (local).
+  const yd = new Date();
+  yd.setDate(yd.getDate() - 1);
+  const yesterday = dateKey(yd);
+
+  const rankMap = (standings) => {
+    const m = {};
+    standings.forEach((p, i) => { m[p.name] = i + 1; });
+    return m;
+  };
+
+  const todayRanks = rankMap(getStandings('overall', today));
+  const yestRanks  = rankMap(getStandings('overall', yesterday));
+
+  // For each person, movement = yesterday's rank - today's rank (positive = moved up).
+  const movement = {};
+  for (const name in todayRanks) {
+    if (yestRanks[name] == null) movement[name] = 'new';        // wasn't ranked yesterday
+    else movement[name] = yestRanks[name] - todayRanks[name];   // + up, - down, 0 same
+  }
+  return movement;
 }
 
 /* ---- STREAKS ----
@@ -965,10 +1119,21 @@ function renderBoard() {
     return;
   }
 
+  // Rank movement (only meaningful on the overall board).
+  const movement = currentMetric === 'overall' ? getRankMovement() : {};
+  const arrowFor = (name) => {
+    const m = movement[name];
+    if (m === 'new') return '<span class="rank-move new">NEW</span>';
+    if (m == null || m === 0) return '<span class="rank-move same">–</span>';
+    if (m > 0) return `<span class="rank-move up">▲${m}</span>`;
+    return `<span class="rank-move down">▼${Math.abs(m)}</span>`;
+  };
+
   board.innerHTML = standings.map((p, i) => {
     const rank = i + 1;
     const streak = getStreak(p.name);
     const flame = streak > 1 ? `<span class="streak">🔥 ${streak}</span>` : '';
+    const move = currentMetric === 'overall' ? arrowFor(p.name) : '';
     const metaText =
       currentMetric === 'steps' ? 'total steps'
       : currentMetric === 'overall' ? 'combined score'
@@ -994,7 +1159,7 @@ function renderBoard() {
 
     return `
       <div class="row r${rank}" data-name="${escapeHtml(p.name)}">
-        <div class="rank">${rank}</div>
+        <div class="rank">${rank} ${move}</div>
         <div>
           <div class="who">${escapeHtml(p.name)} ${flame}</div>
           <div class="meta">${metaText} · tap for stats</div>
@@ -1019,7 +1184,7 @@ function renderScoring() {
   const rows = [
     { what: 'Workout time', pts: `1 point per ${Math.round(1 / POINTS.perWorkoutMinute)} minutes` },
     { what: 'Water',        pts: `1 point per ${userUnitsPerPoint} ${waterLabel()}` },
-    { what: 'Sleep',        pts: `${POINTS.perSleepHour} points per hour` },
+    { what: 'Sleep',        pts: `${POINTS.perSleepHour} point per hour` },
     { what: 'Steps',        pts: `${POINTS.stepsBase} pts at 10k, +${POINTS.stepsPerExtra5k} per extra 5k` },
     { what: 'Logging weight', pts: `${POINTS.weightLogged} points for logging (private)` },
   ];
@@ -1172,6 +1337,49 @@ function renderWeight() {
   el.innerHTML = html;
 }
 
+// Render the chat wall (newest first), with a delete link on my own messages.
+function renderChat() {
+  const el = document.getElementById('chat');
+  if (!el) return;
+  if (messages.length === 0) {
+    el.innerHTML = '<div class="empty">No messages yet. Start the trash talk.</div>';
+    return;
+  }
+  el.innerHTML = messages.map(m => {
+    const mine = currentUser && m.user_id === currentUser.id;
+    const del = mine ? `<span class="cm-del" data-del-msg="${m.id}">delete</span>` : `<span class="cm-del">${timeAgo(m.created_at)}</span>`;
+    return `<div class="chat-msg">
+      <span><span class="cm-who">${escapeHtml(m.username)}</span> <span class="cm-body">${escapeHtml(m.body)}</span></span>
+      ${del}
+    </div>`;
+  }).join('');
+}
+
+// Render the nudge area: who hasn't logged today + buttons, then recent nudges.
+function renderNudges() {
+  const area = document.getElementById('nudgeArea');
+  const feed = document.getElementById('nudgeFeed');
+  if (!area || !feed) return;
+
+  // Who has logged TODAY (by username), based on entries.
+  const today = todayStr();
+  const loggedToday = new Set(entries.filter(e => e.date === today).map(e => e.name));
+  // Everyone we know about (anyone with a username / any entry).
+  const everyone = [...new Set(entries.map(e => e.name))];
+  const slackers = everyone.filter(n => !loggedToday.has(n));
+
+  area.innerHTML = slackers.length === 0
+    ? '<div class="nudge-note">Everyone has logged today. 🎉</div>'
+    : `<div class="nudge-note">Hasn't logged today — give 'em a nudge:</div>
+       <div class="nudge-pending">${
+         slackers.map(n => `<button class="nudge-btn" data-nudge="${escapeHtml(n)}">👉 ${escapeHtml(n)}</button>`).join('')
+       }</div>`;
+
+  feed.innerHTML = nudges.slice(0, 8).map(n =>
+    `<div class="nudge-note">👉 ${escapeHtml(n.from_name)} nudged ${escapeHtml(n.to_name)} · ${timeAgo(n.created_at)}</div>`
+  ).join('');
+}
+
 // Tiny safety helper: never inject raw user text into HTML.
 // (A real SRE habit — untrusted input gets escaped.)
 function escapeHtml(str) {
@@ -1249,10 +1457,54 @@ function renderCountdown() {
    WIRING  (connecting buttons to functions)
 ================================================================== */
 
-// Default the date input to today.
-document.getElementById('date').valueAsDate = new Date();
+// Default the date input to today, and cap it so no future dates can be picked.
+function todayStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+}
+const dateInput = document.getElementById('date');
+dateInput.value = todayStr();
+dateInput.max = todayStr();   // browser blocks dates after today
 
-// Handle metric chip clicks.
+// When you pick a date you've ALREADY logged, offer to load it for editing.
+// This is the edit feature: auto-fill the form from your existing entry.
+dateInput.addEventListener('change', () => {
+  const deleteBtn = document.getElementById('deleteBtn');
+  deleteBtn.style.display = 'none';   // reset; shown only when editing an existing entry
+  if (!currentUser) return;
+  const picked = dateInput.value;
+  // Find my own entry for that date, if any.
+  const mine = entries.find(e => e.userId === currentUser.id && e.date === picked);
+  if (!mine) return;   // nothing logged that day — leave the form as-is
+
+  if (confirm(`You already logged ${picked}. Load it to edit? (Your current form entries will be replaced.)`)) {
+    document.getElementById('workoutType').value = mine.workoutType || 'Run';
+    document.getElementById('minutes').value = mine.minutes || '';
+    document.getElementById('water').value = mine.water ? round1(mlToWater(mine.water)) : '';
+    document.getElementById('sleep').value = mine.sleep || '';
+    document.getElementById('steps').value = mine.steps || '';
+    // Weight lives in the private table; load it if present.
+    document.getElementById('weight').value = (picked in myWeights) ? round1(kgToWeight(myWeights[picked])) : '';
+    // Offer delete only if still within the edit window.
+    if (entryEditable(picked)) deleteBtn.style.display = 'block';
+  }
+});
+
+// Delete the currently-selected day's entry (within the edit window).
+document.getElementById('deleteBtn').addEventListener('click', async () => {
+  const picked = dateInput.value;
+  if (!confirm(`Delete your entry for ${picked}? This can't be undone.`)) return;
+  const err = await deleteEntry(picked);
+  if (err) { alert(err); return; }
+  // Clear the form and hide the button.
+  ['minutes','water','sleep','steps','weight'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('deleteBtn').style.display = 'none';
+});
+
+// Small rounding helper used in a few display spots.
+function round1(n) { return Math.round(n * 10) / 10; }
 document.getElementById('lbControls').addEventListener('click', (e) => {
   const chip = e.target.closest('.chip');
   if (!chip) return;
@@ -1278,6 +1530,47 @@ document.getElementById('feed').addEventListener('click', (e) => {
   const idx = Number(row.dataset.feedIdx);
   expandedFeedIdx = (expandedFeedIdx === idx) ? null : idx;  // toggle
   renderFeed();
+});
+
+// --- Chat wall handlers ---
+const chatInput = document.getElementById('chatInput');
+const chatCount = document.getElementById('chatCount');
+
+// Live character counter.
+function updateChatCount() {
+  const left = MAX_MESSAGE_LEN - chatInput.value.length;
+  chatCount.textContent = `${left} characters left`;
+}
+chatInput.addEventListener('input', updateChatCount);
+updateChatCount();
+
+// Post a message.
+async function doSend() {
+  const text = chatInput.value.trim();
+  if (!text) return;
+  const username = document.getElementById('whoami').textContent.replace('Logged in as ', '') || 'someone';
+  const err = await postMessage(text, username);
+  if (err) { alert('Could not post: ' + err); return; }
+  chatInput.value = '';
+  updateChatCount();
+}
+document.getElementById('chatSend').addEventListener('click', doSend);
+chatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSend(); });
+
+// Delete my own message (event delegation on the chat container).
+document.getElementById('chat').addEventListener('click', (e) => {
+  const del = e.target.closest('[data-del-msg]');
+  if (!del) return;
+  if (confirm('Delete this message?')) deleteMessage(del.dataset.delMsg);
+});
+
+// Nudge a specific person (button in the nudge area).
+document.getElementById('nudgeArea').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-nudge]');
+  if (!btn) return;
+  const toName = btn.dataset.nudge;
+  const fromName = document.getElementById('whoami').textContent.replace('Logged in as ', '') || 'someone';
+  await sendNudge(fromName, toName);
 });
 
 // Change water unit: update preference, save it, and refresh all displays.
@@ -1409,6 +1702,7 @@ function enterApp(user, username) {
   renderScoring();        // scoring text depends on the user's unit
   showScreen('app');
   loadEntries();          // pull everyone's data from the database
+  loadSocial();           // chat messages and nudges
 }
 
 // The single decision point: given a session (or none), pick the right screen.
@@ -1434,9 +1728,6 @@ db.auth.onAuthStateChange((_event, session) => route(session));
 /* =================================================================
    STARTUP  (things that run no matter the login state)
 ================================================================== */
-
-// Default the date input to today.
-document.getElementById('date').valueAsDate = new Date();
 
 // Paint the scoring explainer once — it's static (derived from POINTS).
 renderScoring();
