@@ -1841,7 +1841,7 @@ document.getElementById('usernameBtn').addEventListener('click', async () => {
 
   // Announce the new participant in the chat wall (only on first signup).
   currentUser = user;
-  await postMessage(`👋 Welcome, ${name}! Just joined the competition.`, name, false);
+  await postMessage(`👋 Welcome! ${name} just joined the competition.`, name, false);
 
   enterApp(user, name);   // straight into the app with the new name
 });
