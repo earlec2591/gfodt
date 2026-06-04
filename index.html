@@ -392,6 +392,14 @@
   }
   .blur-toggle input { width: 14px; height: 14px; accent-color: var(--accent); }
 
+  /* ---- Participants ---- */
+  .participant-count { font-size: 13px; color: var(--muted); margin-bottom: 12px; text-align: center; }
+  .participant-list { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .participant-chip {
+    background: var(--surface-2); border: 1px solid var(--line);
+    border-radius: 20px; padding: 6px 14px; font-size: 13px; color: var(--text);
+  }
+
   /* ---- Nudge ---- */
   .nudge-pending { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
   .nudge-btn {
@@ -539,6 +547,12 @@
     <div class="cd-clock" id="cdClock"></div>
   </section>
 
+  <!-- ============ PARTICIPANTS ============ -->
+  <section class="card" id="participantsCard">
+    <h2>Participants</h2>
+    <div id="participants"></div>
+  </section>
+
   <!-- ============ LOG FORM ============ -->
   <section class="card">
     <h2>Log today</h2>
@@ -560,7 +574,7 @@
           <option>Yoga</option>
           <option>Pilates</option>
           <option>Basketball</option>
-          <option>Soccer/footie</option>
+          <option>Soccer/Footie</option>
           <option>Football</option>
           <option>Other</option>
         </select>
@@ -613,18 +627,6 @@
     <div id="weightTrend"></div>
   </section>
 
-  <!-- ============ HOW POINTS WORK ============ -->
-  <section class="card">
-    <h2>How points work</h2>
-    <div id="scoring"></div>
-  </section>
-
-  <!-- ============ BADGES ============ -->
-  <section class="card" id="badgesCard">
-    <h2>Badges</h2>
-    <div id="badges"></div>
-  </section>
-
   <!-- ============ LEADERBOARD ============ -->
   <section class="card">
     <h2>Leaderboard</h2>
@@ -633,7 +635,7 @@
       <span class="chip" data-metric="minutes">Workout minutes</span>
       <span class="chip" data-metric="water">Water</span>
       <span class="chip" data-metric="sleep">Sleep</span>
-      <span class="chip" data-metric="steps">10k days</span>
+      <span class="chip" data-metric="steps">Steps</span>
     </div>
     <div id="board"></div>
   </section>
@@ -642,13 +644,6 @@
   <section class="card">
     <h2>Recent activity</h2>
     <div id="feed"></div>
-  </section>
-
-  <!-- ============ NUDGE ============ -->
-  <section class="card">
-    <h2>Nudge</h2>
-    <div id="nudgeArea"></div>
-    <div id="nudgeFeed"></div>
   </section>
 
   <!-- ============ CHAT WALL ============ -->
@@ -661,6 +656,25 @@
     <label class="blur-toggle"><input type="checkbox" id="chatBlur"> Post as a spoiler (blurred until tapped)</label>
     <div id="chatCount" class="chat-count"></div>
     <div id="chat"></div>
+  </section>
+
+  <!-- ============ BADGES ============ -->
+  <section class="card" id="badgesCard">
+    <h2>Badges</h2>
+    <div id="badges"></div>
+  </section>
+
+  <!-- ============ NUDGE ============ -->
+  <section class="card">
+    <h2>Nudge</h2>
+    <div id="nudgeArea"></div>
+    <div id="nudgeFeed"></div>
+  </section>
+
+  <!-- ============ HOW POINTS WORK ============ -->
+  <section class="card">
+    <h2>How points work</h2>
+    <div id="scoring"></div>
   </section>
 
   </div><!-- /#app -->
@@ -696,6 +710,7 @@ function withTimeout(promise, ms, label) {
 // Local cache of entries, refilled from the database whenever data changes.
 // The view layer reads from this; the database is the source of truth.
 let entries = [];
+let allParticipants = [];   // every registered username, for the participants list
 
 // Turn an email into a friendly display name: "alex@gmail.com" -> "alex".
 function nameFromEmail(email) {
@@ -820,6 +835,12 @@ async function loadEntries() {
   // Build a quick lookup: user_id -> username.
   const nameById = {};
   for (const p of (profilesRes.data || [])) nameById[p.id] = p.username;
+
+  // All registered participants (everyone who has picked a username).
+  allParticipants = (profilesRes.data || [])
+    .map(p => p.username)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
 
   // Store my weights keyed by date, and note which dates I logged weight.
   myWeights = {};
@@ -1302,6 +1323,21 @@ function renderAll() {
   renderBadges();
   renderFeed();
   renderWeight();
+  renderParticipants();
+}
+
+// Render the list of everyone registered (usernames only).
+function renderParticipants() {
+  const el = document.getElementById('participants');
+  if (!el) return;
+  if (allParticipants.length === 0) {
+    el.innerHTML = '<div class="empty">No participants yet.</div>';
+    return;
+  }
+  el.innerHTML = `<div class="participant-count">${allParticipants.length} competing</div>
+    <div class="participant-list">${
+      allParticipants.map(n => `<span class="participant-chip">${escapeHtml(n)}</span>`).join('')
+    }</div>`;
 }
 
 // Render the private weight section: a summary plus a hand-drawn SVG trend line.
@@ -1594,8 +1630,15 @@ document.getElementById('chat').addEventListener('click', (e) => {
   // Find the message id from the body span or its sibling.
   const span = e.target.closest('.chat-msg').querySelector('[data-msg-id]');
   if (!span) return;
-  revealedMsgs.add(span.dataset.msgId);
+  const id = span.dataset.msgId;
+  if (revealedMsgs.has(id)) return;   // already revealed; ignore repeat taps
+  revealedMsgs.add(id);
   renderChat();
+  // Re-blur after 30 seconds so spoilers don't stay open forever.
+  setTimeout(() => {
+    revealedMsgs.delete(id);
+    renderChat();
+  }, 30000);
 });
 
 // Nudge a specific person (button in the nudge area).
@@ -1714,6 +1757,10 @@ document.getElementById('usernameBtn').addEventListener('click', async () => {
   msg.textContent = 'Saving…';
   const error = await saveMyUsername(user, name);
   if (error) { msg.textContent = 'Could not save: ' + error.message; return; }
+
+  // Announce the new participant in the chat wall (only on first signup).
+  currentUser = user;
+  await postMessage(`👋 Welcome, ${name}! Just joined the competition.`, name, false);
 
   enterApp(user, name);   // straight into the app with the new name
 });
