@@ -684,6 +684,15 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// Wrap a promise so it rejects if it takes too long, instead of hanging forever.
+// Used on startup network calls so a stalled request can't freeze the app.
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error((label || 'request') + ' timed out')), ms)),
+  ]);
+}
+
 // Local cache of entries, refilled from the database whenever data changes.
 // The view layer reads from this; the database is the source of truth.
 let entries = [];
@@ -1735,20 +1744,48 @@ function enterApp(user, username) {
 async function route(session) {
   if (!session) { showScreen('gate'); return; }   // not logged in → login form
 
-  const user = session.user;
-  const username = await getMyUsername(user);      // do they have a name yet?
-  if (username) {
-    enterApp(user, username);                      // yes → app
-  } else {
-    showScreen('username');                        // no → pick-a-name screen
+  try {
+    const user = session.user;
+    const username = await withTimeout(getMyUsername(user), 5000, 'profile lookup');      // do they have a name yet?
+    if (username) {
+      enterApp(user, username);                      // yes → app
+    } else {
+      showScreen('username');                        // no → pick-a-name screen
+    }
+  } catch (err) {
+    // If the profile lookup fails, don't hang — show login so the user can retry.
+    console.error('Routing failed:', err);
+    showScreen('gate');
   }
 }
 
 // Start in the 'checking' state so NOTHING sensitive shows until we know
 // the login status. Then check the session and route accordingly.
 showScreen('checking');
-db.auth.getSession().then(({ data }) => route(data.session));
-db.auth.onAuthStateChange((_event, session) => route(session));
+
+// Safety net: if the session check stalls (network/Supabase hiccup), don't
+// hang on the loading screen forever. After 6 seconds, fall back to login.
+// Once any real routing happens, this timer is cancelled.
+let routed = false;
+const startupTimeout = setTimeout(() => {
+  if (!routed) {
+    console.warn('Session check timed out — showing login.');
+    showScreen('gate');
+  }
+}, 6000);
+
+function routeOnce(session) {
+  routed = true;
+  clearTimeout(startupTimeout);
+  route(session);
+}
+
+db.auth.getSession()
+  .then(({ data }) => routeOnce(data.session))
+  .catch((err) => { console.error('getSession failed:', err); routeOnce(null); });
+
+// React to later auth changes (login via magic link, logout).
+db.auth.onAuthStateChange((_event, session) => routeOnce(session));
 
 /* =================================================================
    STARTUP  (things that run no matter the login state)
