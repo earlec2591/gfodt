@@ -378,6 +378,19 @@
   .chat-msg .cm-who { font-weight: 600; color: var(--accent); }
   .chat-msg .cm-body { color: var(--text); }
   .chat-msg .cm-del { color: var(--muted); cursor: pointer; font-size: 12px; white-space: nowrap; }
+  .chat-msg .cm-meta { display: flex; gap: 10px; align-items: baseline; white-space: nowrap; }
+  .chat-msg .cm-time { color: var(--muted); font-size: 11px; }
+  .chat-msg .cm-body.blurred {
+    filter: blur(5px);
+    cursor: pointer;
+    user-select: none;
+  }
+  .chat-msg .cm-reveal { font-size: 11px; color: var(--accent); cursor: pointer; margin-left: 6px; }
+  .blur-toggle {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--muted); margin-bottom: 8px; cursor: pointer;
+  }
+  .blur-toggle input { width: 14px; height: 14px; accent-color: var(--accent); }
 
   /* ---- Nudge ---- */
   .nudge-pending { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
@@ -645,6 +658,7 @@
       <input type="text" id="chatInput" maxlength="280" placeholder="Say something…">
       <button id="chatSend">Post</button>
     </div>
+    <label class="blur-toggle"><input type="checkbox" id="chatBlur"> Post as a spoiler (blurred until tapped)</label>
     <div id="chatCount" class="chat-count"></div>
     <div id="chat"></div>
   </section>
@@ -840,6 +854,7 @@ const MAX_MESSAGE_LEN = 280;
 
 // Caches for chat and nudges, refilled on load.
 let messages = [];
+let revealedMsgs = new Set();   // ids of blurred messages this viewer has revealed
 let nudges = [];
 
 // CHAT: load recent messages and nudges (newest first).
@@ -854,24 +869,18 @@ async function loadSocial() {
   renderNudges();
 }
 
-// CHAT: post a message (trimmed and length-capped).
-async function postMessage(body, username) {
+// CHAT: post a message (trimmed and length-capped). `blurred` hides it as a
+// spoiler until another viewer taps to reveal.
+async function postMessage(body, username, blurred) {
   if (!currentUser) return 'Not logged in';
   const text = (body || '').trim().slice(0, MAX_MESSAGE_LEN);
   if (!text) return 'Empty message';
   const { error } = await db.from('messages').insert({
-    user_id: currentUser.id, username, body: text,
+    user_id: currentUser.id, username, body: text, blurred: !!blurred,
   });
   if (error) return error.message;
   await loadSocial();
   return null;
-}
-
-// CHAT: delete one of my own messages.
-async function deleteMessage(id) {
-  if (!currentUser) return;
-  await db.from('messages').delete().eq('id', id).eq('user_id', currentUser.id);
-  await loadSocial();
 }
 
 // NUDGE: record a visible "X nudged Y" note.
@@ -1271,6 +1280,13 @@ function timeAgo(iso) {
   return Math.floor(secs / 86400) + 'd ago';
 }
 
+// Format a timestamp as 24-hour HH:MM in the VIEWER's local time zone.
+// The browser converts the stored UTC moment to local automatically.
+function clockTime(iso) {
+  const d = new Date(iso);
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+
 // Render everything that depends on entry data, in one call.
 function renderAll() {
   renderBoard();
@@ -1346,11 +1362,14 @@ function renderChat() {
     return;
   }
   el.innerHTML = messages.map(m => {
-    const mine = currentUser && m.user_id === currentUser.id;
-    const del = mine ? `<span class="cm-del" data-del-msg="${m.id}">delete</span>` : `<span class="cm-del">${timeAgo(m.created_at)}</span>`;
+    const revealed = revealedMsgs.has(m.id);
+    const isBlurred = m.blurred && !revealed;
+    const bodyClass = isBlurred ? 'cm-body blurred' : 'cm-body';
+    const hint = isBlurred ? ' <span class="cm-reveal">tap to reveal</span>' : '';
     return `<div class="chat-msg">
-      <span><span class="cm-who">${escapeHtml(m.username)}</span> <span class="cm-body">${escapeHtml(m.body)}</span></span>
-      ${del}
+      <span><span class="cm-who">${escapeHtml(m.username)}</span>
+        <span class="${bodyClass}" data-msg-id="${m.id}">${escapeHtml(m.body)}</span>${hint}</span>
+      <span class="cm-meta"><span class="cm-time">${clockTime(m.created_at)}</span></span>
     </div>`;
   }).join('');
 }
@@ -1549,19 +1568,25 @@ async function doSend() {
   const text = chatInput.value.trim();
   if (!text) return;
   const username = document.getElementById('whoami').textContent.replace('Logged in as ', '') || 'someone';
-  const err = await postMessage(text, username);
+  const blurChk = document.getElementById('chatBlur');
+  const err = await postMessage(text, username, blurChk.checked);
   if (err) { alert('Could not post: ' + err); return; }
   chatInput.value = '';
+  blurChk.checked = false;   // reset spoiler toggle after posting
   updateChatCount();
 }
 document.getElementById('chatSend').addEventListener('click', doSend);
 chatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSend(); });
 
-// Delete my own message (event delegation on the chat container).
+// Tap a blurred (spoiler) message to reveal it — per viewer, not stored.
 document.getElementById('chat').addEventListener('click', (e) => {
-  const del = e.target.closest('[data-del-msg]');
-  if (!del) return;
-  if (confirm('Delete this message?')) deleteMessage(del.dataset.delMsg);
+  const body = e.target.closest('[data-msg-id]') || e.target.closest('.cm-reveal');
+  if (!body) return;
+  // Find the message id from the body span or its sibling.
+  const span = e.target.closest('.chat-msg').querySelector('[data-msg-id]');
+  if (!span) return;
+  revealedMsgs.add(span.dataset.msgId);
+  renderChat();
 });
 
 // Nudge a specific person (button in the nudge area).
