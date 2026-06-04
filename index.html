@@ -400,6 +400,34 @@
     border-radius: 20px; padding: 6px 14px; font-size: 13px; color: var(--text);
   }
 
+  /* ---- Loading bar (top of screen during fetches) ---- */
+  #loadingBar {
+    position: fixed; top: 0; left: 0; height: 3px; width: 0;
+    background: var(--accent); z-index: 1000;
+    transition: width 0.3s ease, opacity 0.3s ease; opacity: 0;
+  }
+  #loadingBar.active { width: 85%; opacity: 1; }
+  #loadingBar.done   { width: 100%; opacity: 0; }
+
+  /* ---- Toast (brief confirmation messages) ---- */
+  #toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--accent); color: #0d1117; font-weight: 600;
+    padding: 12px 22px; border-radius: 12px; font-size: 15px;
+    z-index: 1001; opacity: 0; pointer-events: none;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.4); max-width: 90vw; text-align: center;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ---- Today's log status ---- */
+  .today-status {
+    font-size: 13px; margin-bottom: 16px; text-align: center;
+    padding: 8px; border-radius: 8px;
+  }
+  .today-status.done { color: var(--accent); background: var(--surface-2); }
+  .today-status.pending { color: var(--muted); }
+
   /* ---- Nudge ---- */
   .nudge-pending { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
   .nudge-btn {
@@ -502,6 +530,10 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
+<!-- Top loading bar — shows during data fetches -->
+<div id="loadingBar"></div>
+<!-- Toast notifications — brief confirmation messages -->
+<div id="toast"></div>
 <div class="wrap">
 
   <!-- ============ CHECKING STATE (shown while we verify login) ============ -->
@@ -556,6 +588,7 @@
   <!-- ============ LOG FORM ============ -->
   <section class="card">
     <h2>Log today</h2>
+    <div id="todayStatus" class="today-status"></div>
     <div class="grid">
       <div class="field">
         <label for="date">Date</label>
@@ -707,6 +740,31 @@ function withTimeout(promise, ms, label) {
   ]);
 }
 
+// Brief confirmation message that slides up, then fades.
+let toastTimer = null;
+function showToast(message) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = message;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+// Top loading bar: call startLoading() before a fetch, stopLoading() after.
+function startLoading() {
+  const el = document.getElementById('loadingBar');
+  if (!el) return;
+  el.classList.remove('done');
+  el.classList.add('active');
+}
+function stopLoading() {
+  const el = document.getElementById('loadingBar');
+  if (!el) return;
+  el.classList.remove('active');
+  el.classList.add('done');
+}
+
 // Local cache of entries, refilled from the database whenever data changes.
 // The view layer reads from this; the database is the source of truth.
 let entries = [];
@@ -823,6 +881,7 @@ let myWeights = {};
 // everyone's usernames so the board shows chosen names, not email prefixes,
 // plus the current user's own private weights.
 async function loadEntries() {
+  startLoading();
   // Fetch entries, profiles, and (private) my-weights in parallel.
   const [entriesRes, profilesRes, weightsRes] = await Promise.all([
     db.from('entries').select('*'),
@@ -830,7 +889,7 @@ async function loadEntries() {
     db.from('weights').select('entry_date, weight_kg'),   // RLS returns only mine
   ]);
 
-  if (entriesRes.error) { console.error('Load failed:', entriesRes.error.message); return; }
+  if (entriesRes.error) { console.error('Load failed:', entriesRes.error.message); stopLoading(); return; }
 
   // Build a quick lookup: user_id -> username.
   const nameById = {};
@@ -864,6 +923,7 @@ async function loadEntries() {
   }));
 
   renderAll();
+  stopLoading();
 }
 
 // SAVE my weight for a given date (private). Stores canonical kg.
@@ -1324,6 +1384,22 @@ function renderAll() {
   renderFeed();
   renderWeight();
   renderParticipants();
+  renderTodayStatus();
+}
+
+// Show whether the current user has logged today, so their status is clear.
+function renderTodayStatus() {
+  const el = document.getElementById('todayStatus');
+  if (!el || !currentUser) return;
+  const myName = document.getElementById('whoami').textContent.replace('Logged in as ', '');
+  const loggedToday = entries.some(e => e.name === myName && e.date === todayStr());
+  if (loggedToday) {
+    el.className = 'today-status done';
+    el.textContent = "✓ You've logged today. Pick today's date to edit it.";
+  } else {
+    el.className = 'today-status pending';
+    el.textContent = "You haven't logged today yet.";
+  }
 }
 
 // Render the list of everyone registered (usernames only).
@@ -1428,8 +1504,9 @@ function renderNudges() {
   // Who has logged TODAY (by username), based on entries.
   const today = todayStr();
   const loggedToday = new Set(entries.filter(e => e.date === today).map(e => e.name));
-  // Everyone we know about (anyone with a username / any entry).
-  const everyone = [...new Set(entries.map(e => e.name))];
+  // Everyone who's REGISTERED (not just people who've logged before) — this is
+  // the fix: someone who never logged still needs to appear as not-logged-today.
+  const everyone = allParticipants.length ? allParticipants : [...new Set(entries.map(e => e.name))];
   const slackers = everyone.filter(n => !loggedToday.has(n));
 
   area.innerHTML = slackers.length === 0
@@ -1704,6 +1781,10 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
 
   btn.disabled = false;
   btn.textContent = 'Submit entry';
+
+  // Confirm it worked, with the points earned, so there's no "did that save?" doubt.
+  const isToday = dateStr === todayStr();
+  showToast(isToday ? '✓ Logged for today!' : `✓ Saved for ${dateStr}`);
 });
 
 /* =================================================================
