@@ -408,7 +408,11 @@
     background: var(--surface-2); border: 1px solid var(--line);
     border-radius: 10px; padding: 12px 14px;
   }
-  .signup-q input { width: 18px; height: 18px; accent-color: var(--accent); flex-shrink: 0; }
+  /* Override the global full-width / centered input rules for these checkboxes. */
+  .signup-q input[type="checkbox"] {
+    width: 18px; height: 18px; min-width: 18px; margin: 0;
+    accent-color: var(--accent); flex-shrink: 0;
+  }
 
   /* ---- Loading bar (top of screen during fetches) ---- */
   #loadingBar {
@@ -1507,7 +1511,7 @@ function escapeHtml(str) {
 
 const COMPETITION = {
   start: new Date(2026, 5, 7, 0, 0, 0),  // June 7 2026, local midnight (month 5 = June)
-  durationDays: 28,
+  durationDays: 30,
 };
 // End = start + 30 days. Computed, not hand-typed, so the two can never disagree.
 COMPETITION.end = new Date(COMPETITION.start.getTime() + COMPETITION.durationDays * 24 * 60 * 60 * 1000);
