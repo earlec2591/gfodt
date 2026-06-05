@@ -428,16 +428,6 @@
   .today-status.done { color: var(--accent); background: var(--surface-2); }
   .today-status.pending { color: var(--muted); }
 
-  /* ---- Nudge ---- */
-  .nudge-pending { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
-  .nudge-btn {
-    background: var(--surface-2); border: 1px solid var(--line); color: var(--text);
-    border-radius: 20px; padding: 6px 14px; font-size: 13px; cursor: pointer;
-  }
-  .nudge-btn:hover { border-color: var(--accent); }
-  .nudge-note { font-size: 13px; color: var(--muted); padding: 6px 0; border-bottom: 1px solid var(--line); text-align: left; }
-  .nudge-note:last-child { border-bottom: none; }
-
   /* ---- Inline unit selector ---- */
   .unit-select {
     background: var(--surface-2);
@@ -697,13 +687,6 @@
     <div id="badges"></div>
   </section>
 
-  <!-- ============ NUDGE ============ -->
-  <section class="card">
-    <h2>Nudge</h2>
-    <div id="nudgeArea"></div>
-    <div id="nudgeFeed"></div>
-  </section>
-
   <!-- ============ HOW POINTS WORK ============ -->
   <section class="card">
     <h2>How points work</h2>
@@ -942,21 +925,15 @@ async function saveMyWeight(dateStr, displayValue) {
 // Max length for a chat message. One place to change it.
 const MAX_MESSAGE_LEN = 280;
 
-// Caches for chat and nudges, refilled on load.
+// Cache for chat messages, refilled on load.
 let messages = [];
 let revealedMsgs = new Set();   // ids of blurred messages this viewer has revealed
-let nudges = [];
 
-// CHAT: load recent messages and nudges (newest first).
+// CHAT: load recent messages (newest first).
 async function loadSocial() {
-  const [msgRes, nudgeRes] = await Promise.all([
-    db.from('messages').select('*').order('created_at', { ascending: false }).limit(50),
-    db.from('nudges').select('*').order('created_at', { ascending: false }).limit(20),
-  ]);
+  const msgRes = await db.from('messages').select('*').order('created_at', { ascending: false }).limit(50);
   messages = msgRes.data || [];
-  nudges   = nudgeRes.data || [];
   renderChat();
-  renderNudges();
 }
 
 // CHAT: post a message (trimmed and length-capped). `blurred` hides it as a
@@ -971,13 +948,6 @@ async function postMessage(body, username, blurred) {
   if (error) return error.message;
   await loadSocial();
   return null;
-}
-
-// NUDGE: record a visible "X nudged Y" note.
-async function sendNudge(fromName, toName) {
-  if (!currentUser) return;
-  await db.from('nudges').insert({ from_name: fromName, to_name: toName });
-  await loadSocial();
 }
 
 // Whether an entry is still editable: until the END of the day AFTER its date,
@@ -1495,32 +1465,6 @@ function renderChat() {
   }).join('');
 }
 
-// Render the nudge area: who hasn't logged today + buttons, then recent nudges.
-function renderNudges() {
-  const area = document.getElementById('nudgeArea');
-  const feed = document.getElementById('nudgeFeed');
-  if (!area || !feed) return;
-
-  // Who has logged TODAY (by username), based on entries.
-  const today = todayStr();
-  const loggedToday = new Set(entries.filter(e => e.date === today).map(e => e.name));
-  // Everyone who's REGISTERED (not just people who've logged before) — this is
-  // the fix: someone who never logged still needs to appear as not-logged-today.
-  const everyone = allParticipants.length ? allParticipants : [...new Set(entries.map(e => e.name))];
-  const slackers = everyone.filter(n => !loggedToday.has(n));
-
-  area.innerHTML = slackers.length === 0
-    ? '<div class="nudge-note">Everyone has logged today. 🎉</div>'
-    : `<div class="nudge-note">Hasn't logged today — give 'em a nudge:</div>
-       <div class="nudge-pending">${
-         slackers.map(n => `<button class="nudge-btn" data-nudge="${escapeHtml(n)}">👉 ${escapeHtml(n)}</button>`).join('')
-       }</div>`;
-
-  feed.innerHTML = nudges.slice(0, 8).map(n =>
-    `<div class="nudge-note">👉 ${escapeHtml(n.from_name)} nudged ${escapeHtml(n.to_name)} · ${timeAgo(n.created_at)}</div>`
-  ).join('');
-}
-
 // Tiny safety helper: never inject raw user text into HTML.
 // (A real SRE habit — untrusted input gets escaped.)
 function escapeHtml(str) {
@@ -1715,16 +1659,7 @@ document.getElementById('chat').addEventListener('click', (e) => {
   setTimeout(() => {
     revealedMsgs.delete(id);
     renderChat();
-  }, 5000);
-});
-
-// Nudge a specific person (button in the nudge area).
-document.getElementById('nudgeArea').addEventListener('click', async (e) => {
-  const btn = e.target.closest('[data-nudge]');
-  if (!btn) return;
-  const toName = btn.dataset.nudge;
-  const fromName = document.getElementById('whoami').textContent.replace('Logged in as ', '') || 'someone';
-  await sendNudge(fromName, toName);
+  }, 30000);
 });
 
 // Change water unit: update preference, save it, and refresh all displays.
@@ -1841,7 +1776,7 @@ document.getElementById('usernameBtn').addEventListener('click', async () => {
 
   // Announce the new participant in the chat wall (only on first signup).
   currentUser = user;
-  await postMessage(`👋 Welcome! ${name} just joined the competition.`, name, false);
+  await postMessage(`👋 Welcome, ${name}! Just joined the competition.`, name, false);
 
   enterApp(user, name);   // straight into the app with the new name
 });
@@ -1864,7 +1799,7 @@ function enterApp(user, username) {
   renderScoring();        // scoring text depends on the user's unit
   showScreen('app');
   loadEntries();          // pull everyone's data from the database
-  loadSocial();           // chat messages and nudges
+  loadSocial();           // chat messages
 }
 
 // The single decision point: given a session (or none), pick the right screen.
