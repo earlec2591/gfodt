@@ -400,6 +400,16 @@
     border-radius: 20px; padding: 6px 14px; font-size: 13px; color: var(--text);
   }
 
+  /* ---- Signup tracking questions ---- */
+  .signup-q {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 14px; color: var(--text); text-align: left;
+    margin-bottom: 12px; cursor: pointer;
+    background: var(--surface-2); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 14px;
+  }
+  .signup-q input { width: 18px; height: 18px; accent-color: var(--accent); flex-shrink: 0; }
+
   /* ---- Loading bar (top of screen during fetches) ---- */
   #loadingBar {
     position: fixed; top: 0; left: 0; height: 3px; width: 0;
@@ -546,6 +556,8 @@
     <h1>Pick your name</h1>
     <p>This is how you'll show up on the leaderboard. Choose wisely — trash talk depends on it.</p>
     <input type="text" id="usernameInput" placeholder="e.g. SpeedDemon" maxlength="24" autocomplete="off">
+    <label class="signup-q"><input type="checkbox" id="tracksWorkouts"> I use a wearable or app to track my workouts</label>
+    <label class="signup-q"><input type="checkbox" id="tracksSleep"> I use a wearable or app to track my sleep</label>
     <button id="usernameBtn">Save my name</button>
     <div class="msg" id="usernameMsg"></div>
   </div>
@@ -823,10 +835,15 @@ async function saveMyUnits(user) {
 }
 
 // PROFILE: save (or update) this user's username.
-async function saveMyUsername(user, username) {
+async function saveMyUsername(user, username, tracksWorkouts, tracksSleep) {
   const { error } = await db
     .from('profiles')
-    .upsert({ id: user.id, username });   // insert, or update if the row exists
+    .upsert({
+      id: user.id,
+      username,
+      tracks_workouts: !!tracksWorkouts,
+      tracks_sleep:    !!tracksSleep,
+    });   // insert, or update if the row exists
   return error;   // null means success
 }
 
@@ -1490,7 +1507,7 @@ function escapeHtml(str) {
 
 const COMPETITION = {
   start: new Date(2026, 5, 7, 0, 0, 0),  // June 7 2026, local midnight (month 5 = June)
-  durationDays: 30,
+  durationDays: 28,
 };
 // End = start + 30 days. Computed, not hand-typed, so the two can never disagree.
 COMPETITION.end = new Date(COMPETITION.start.getTime() + COMPETITION.durationDays * 24 * 60 * 60 * 1000);
@@ -1771,7 +1788,9 @@ document.getElementById('usernameBtn').addEventListener('click', async () => {
   if (!user) { showScreen('gate'); return; }
 
   msg.textContent = 'Saving…';
-  const error = await saveMyUsername(user, name);
+  const tracksWorkouts = document.getElementById('tracksWorkouts').checked;
+  const tracksSleep    = document.getElementById('tracksSleep').checked;
+  const error = await saveMyUsername(user, name, tracksWorkouts, tracksSleep);
   if (error) { msg.textContent = 'Could not save: ' + error.message; return; }
 
   // Announce the new participant in the chat wall (only on first signup).
