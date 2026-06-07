@@ -869,10 +869,15 @@ async function addEntry(entry) {
 
   // Read any existing entry for this day so we can add to it.
   const { data: existing } = await db.from('entries')
-    .select('minutes, water_ml, steps, nap_hours')
+    .select('minutes, water_ml, steps, nap_hours, sleep_hours')
     .eq('user_id', user.id).eq('entry_date', entry.date).maybeSingle();
 
-  const prev = existing || { minutes: 0, water_ml: 0, steps: 0, nap_hours: 0 };
+  const prev = existing || { minutes: 0, water_ml: 0, steps: 0, nap_hours: 0, sleep_hours: 0 };
+
+  // Sleep REPLACES (latest value wins) — but only if the person actually entered
+  // one. A blank sleep field must NOT wipe a previously logged value, so we keep
+  // the existing sleep when this submission left it empty.
+  const newSleep = (Number(entry.sleep) || 0) > 0 ? Number(entry.sleep) : (Number(prev.sleep_hours) || 0);
 
   const combined = {
     user_id:      user.id,
@@ -883,7 +888,7 @@ async function addEntry(entry) {
     water_ml:     (Number(prev.water_ml)  || 0) + (Number(entry.waterMl) || 0),   // ADD
     steps:        (Number(prev.steps)     || 0) + (Number(entry.steps)   || 0),   // ADD
     nap_hours:    (Number(prev.nap_hours) || 0) + (Number(entry.nap)     || 0),   // ADD
-    sleep_hours:  entry.sleep,                                    // REPLACE (latest)
+    sleep_hours:  newSleep,                                       // REPLACE only if entered
   };
   combined.hit_10k = combined.steps >= 10000;                    // keep old column in sync
 
