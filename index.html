@@ -879,6 +879,10 @@ async function addEntry(entry) {
   // the existing sleep when this submission left it empty.
   const newSleep = (Number(entry.sleep) || 0) > 0 ? Number(entry.sleep) : (Number(prev.sleep_hours) || 0);
 
+  // Steps also REPLACES (latest value wins), since a tracker reports the day's
+  // running total — adding chunks would double-count. Blank leaves it unchanged.
+  const newSteps = (Number(entry.steps) || 0) > 0 ? Number(entry.steps) : (Number(prev.steps) || 0);
+
   const combined = {
     user_id:      user.id,
     email:        user.email,
@@ -886,7 +890,7 @@ async function addEntry(entry) {
     workout_type: entry.workoutType,                              // latest type label
     minutes:      (Number(prev.minutes)   || 0) + (Number(entry.minutes) || 0),   // ADD
     water_ml:     (Number(prev.water_ml)  || 0) + (Number(entry.waterMl) || 0),   // ADD
-    steps:        (Number(prev.steps)     || 0) + (Number(entry.steps)   || 0),   // ADD
+    steps:        newSteps,                                       // REPLACE only if entered
     nap_hours:    (Number(prev.nap_hours) || 0) + (Number(entry.nap)     || 0),   // ADD
     sleep_hours:  newSleep,                                       // REPLACE only if entered
   };
@@ -1069,7 +1073,9 @@ function getStandings(metric, upToDate) {
     if (upToDate && e.date > upToDate) continue;   // ignore entries after the cutoff
     if (!totals[e.name]) totals[e.name] = 0;
     if (metric === 'overall') {
-      totals[e.name] += scoreEntry(e);     // sum of all categories, in points
+      // Sum the ROUNDED per-entry points (same value shown in the feed and daily
+      // views) so the leaderboard total always matches what people add up by eye.
+      totals[e.name] += Math.round(scoreEntry(e));
     } else if (metric === 'steps') {
       totals[e.name] += Number(e.steps) || 0;   // total steps
     } else {
@@ -1157,7 +1163,7 @@ function getPersonStats(name) {
     steps:      sum('steps'),                        // total steps
     tenKDays:   mine.filter(e => (Number(e.steps) || 0) >= 10000).length,
     streak:     getStreak(name),
-    points:     Math.round(mine.reduce((t, e) => t + scoreEntry(e), 0)),
+    points:     mine.reduce((t, e) => t + Math.round(scoreEntry(e)), 0),
   };
 }
 
@@ -1622,7 +1628,7 @@ dateInput.addEventListener('change', () => {
       + `${mine.minutes || 0} min · ${w}${waterLabel()} water · ${(mine.steps||0).toLocaleString()} steps`
       + `${mine.nap ? ' · ' + mine.nap + 'h nap' : ''}`
       + `${mine.sleep ? ' · ' + mine.sleep + 'h sleep' : ''}`
-      + `. <strong>Anything you submit adds to this.</strong>`;
+      + `. <strong>Minutes, water, and nap add on; sleep and steps update to your newest number.</strong>`;
     if (entryEditable(picked)) deleteBtn.style.display = 'block';
   }
 });
