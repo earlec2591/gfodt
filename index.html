@@ -1226,7 +1226,11 @@ function displayTotal(metric, total) {
     const v = mlToWater(total);
     return v >= 100 ? Math.round(v) : Math.round(v * 10) / 10;  // 1 decimal for litres
   }
-  return total;
+  if (metric === 'sleep') {
+    return Math.round(total * 2) / 2;   // nearest 0.5, cleans up float artifacts
+  }
+  // minutes, steps, overall are whole numbers — round to clean up any float noise.
+  return Math.round(total);
 }
 
 // Tracks which person's row is expanded (null = none).
@@ -1273,7 +1277,7 @@ function renderBoard() {
             <div><div class="s-num">${s.points}</div><div class="s-lab">points</div></div>
             <div><div class="s-num">${s.minutes}</div><div class="s-lab">minutes</div></div>
             <div><div class="s-num">${waterDisp}</div><div class="s-lab">${waterLabel()} water</div></div>
-            <div><div class="s-num">${s.sleep}</div><div class="s-lab">hrs sleep</div></div>
+            <div><div class="s-num">${Math.round(s.sleep * 2) / 2}</div><div class="s-lab">hrs sleep</div></div>
             <div><div class="s-num">${s.steps.toLocaleString()}</div><div class="s-lab">total steps</div></div>
             <div><div class="s-num">${s.streak}</div><div class="s-lab">day streak</div></div>
           </div>
@@ -1344,7 +1348,7 @@ function renderFeed() {
   const recent = [...entries]
     .filter(e => e.updatedAt)
     .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
-    .slice(0, 15);
+    .slice(0, 10);
 
   if (recent.length === 0) {
     el.innerHTML = '<div class="empty">No activity yet.</div>';
