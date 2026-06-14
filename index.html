@@ -883,10 +883,10 @@ async function addEntry(entry) {
 
   // Read any existing entry for this day so we can add to it.
   const { data: existing } = await db.from('entries')
-    .select('minutes, water_ml, steps, nap_hours, sleep_hours')
+    .select('minutes, water_ml, steps, nap_hours, sleep_hours, workout_log')
     .eq('user_id', user.id).eq('entry_date', entry.date).maybeSingle();
 
-  const prev = existing || { minutes: 0, water_ml: 0, steps: 0, nap_hours: 0, sleep_hours: 0 };
+  const prev = existing || { minutes: 0, water_ml: 0, steps: 0, nap_hours: 0, sleep_hours: 0, workout_log: '' };
 
   // Sleep REPLACES (latest value wins) — but only if the person actually entered
   // one. A blank sleep field must NOT wipe a previously logged value, so we keep
@@ -897,11 +897,20 @@ async function addEntry(entry) {
   // running total — adding chunks would double-count. Blank leaves it unchanged.
   const newSteps = (Number(entry.steps) || 0) > 0 ? Number(entry.steps) : (Number(prev.steps) || 0);
 
+  // Build a running text log of each workout segment, e.g. "20m Run, 40m Lift".
+  // Only append when this submission actually logged workout minutes.
+  let workoutLog = prev.workout_log || '';
+  if ((Number(entry.minutes) || 0) > 0) {
+    const segment = `${Number(entry.minutes)}m ${entry.workoutType}`;
+    workoutLog = workoutLog ? `${workoutLog}, ${segment}` : segment;
+  }
+
   const combined = {
     user_id:      user.id,
     email:        user.email,
     entry_date:   entry.date,
     workout_type: entry.workoutType,                              // latest type label
+    workout_log:  workoutLog,                                     // running list of segments
     minutes:      (Number(prev.minutes)   || 0) + (Number(entry.minutes) || 0),   // ADD
     water_ml:     (Number(prev.water_ml)  || 0) + (Number(entry.waterMl) || 0),   // ADD
     steps:        newSteps,                                       // REPLACE only if entered
@@ -960,6 +969,7 @@ async function loadEntries() {
     sleep:       row.sleep_hours,
     steps:       row.steps,        // raw step count (number)
     nap:         row.nap_hours,    // nap hours logged that day
+    workoutLog:  row.workout_log,  // running text list of workout segments
     createdAt:   row.created_at,
     updatedAt:   row.updated_at || row.created_at,   // when last logged/changed
     // Public flag: did this person log weight that day? (The number stays private.)
@@ -1371,7 +1381,7 @@ function renderFeed() {
 
   el.innerHTML = recent.map((e, idx) => {
     const bits = [];
-    if (e.minutes) bits.push(`${e.minutes}m ${escapeHtml(e.workoutType || 'workout')}`);
+    if (e.minutes) bits.push(escapeHtml(e.workoutLog || `${e.minutes}m ${e.workoutType || 'workout'}`));
     if (Number(e.steps) > 0) bits.push(`${Number(e.steps).toLocaleString()} steps`);
     if (e.water) {
       const w = mlToWater(e.water);
@@ -1682,7 +1692,8 @@ dateInput.addEventListener('change', () => {
     const w = mine.water ? round1(mlToWater(mine.water)) : 0;
     summary.className = 'today-status done';
     summary.innerHTML = `Already logged for ${picked}: `
-      + `${mine.minutes || 0} min · ${w}${waterLabel()} water · ${(mine.steps||0).toLocaleString()} steps`
+      + `${mine.workoutLog ? escapeHtml(mine.workoutLog) + ' · ' : ''}`
+      + `${mine.minutes || 0} min total · ${w}${waterLabel()} water · ${(mine.steps||0).toLocaleString()} steps`
       + `${mine.nap ? ' · ' + mine.nap + 'h nap' : ''}`
       + `${mine.sleep ? ' · ' + mine.sleep + 'h sleep' : ''}`
       + `. <strong>Minutes, water, and nap add on; sleep and steps update to your newest number.</strong>`;
