@@ -1406,7 +1406,7 @@ function renderFeed() {
         <span class="feed-main">
           <span class="feed-who">${escapeHtml(e.name)}</span>
           <span class="feed-what">${what}</span>
-          <span class="feed-when">· ${timeAgo(e.updatedAt)}</span>
+          <span class="feed-when">· ${shortDate(e.date)} · ${timeAgo(e.updatedAt)}</span>
         </span>
         <span class="feed-points" role="button" tabindex="0">+${pts}<small> pts ▾</small></span>
       </div>
@@ -1428,6 +1428,14 @@ function timeAgo(iso) {
 function clockTime(iso) {
   const d = new Date(iso);
   return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+
+// Format an entry date string (YYYY-MM-DD) as a short, readable label like "Jun 8".
+function shortDate(dateStr) {
+  const [y, m, d] = (dateStr || '').split('-').map(Number);
+  if (!y) return '';
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${months[m - 1]} ${d}`;
 }
 
 // Render everything that depends on entry data, in one call.
