@@ -354,6 +354,18 @@
   .weight-chart .axis { stroke: var(--line); stroke-width: 1; }
   .weight-chart .lbl { fill: var(--muted); font-size: 10px; font-family: var(--font-body); }
 
+  /* ---- Consistency dots ---- */
+  .consistency-summary { font-size: 13px; color: var(--muted); margin-bottom: 12px; text-align: center; }
+  .consistency-summary strong { color: var(--accent); }
+  .dot-grid { display: flex; flex-wrap: wrap; gap: 7px; justify-content: center; }
+  .day-dot {
+    width: 16px; height: 16px; border-radius: 50%;
+    border: 1px solid var(--line); box-sizing: border-box;
+  }
+  .day-dot.logged { background: var(--accent); border-color: var(--accent); }
+  .day-dot.missed { background: transparent; border-color: var(--muted); }
+  .day-dot.today  { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--accent); }
+
   /* ---- Rank movement ---- */
   .rank-move { font-size: 11px; font-weight: 700; font-family: var(--font-body); }
   .rank-move.up   { color: #4ade80; }
@@ -667,7 +679,9 @@
 
   <!-- ============ MY WEIGHT (private, only the logged-in user) ============ -->
   <section class="card" id="weightCard">
-    <h2>My weight 🔒</h2>
+    <h2>My consistency 🔒</h2>
+    <div id="consistency"></div>
+    <h2 style="margin-top:24px;">My weight 🔒</h2>
     <div id="weightTrend"></div>
   </section>
 
@@ -1414,6 +1428,45 @@ function renderAll() {
   renderWeight();
   renderParticipants();
   renderTodayStatus();
+  renderConsistency();
+}
+
+// Show the current user's logged/missed days as a row of dots, from the
+// competition start through today. Private — built only from your own entries.
+function renderConsistency() {
+  const el = document.getElementById('consistency');
+  if (!el || !currentUser) return;
+  const myName = document.getElementById('whoami').textContent.replace('Logged in as ', '');
+
+  // The set of dates I've logged anything on.
+  const myDates = new Set(entries.filter(e => e.name === myName).map(e => e.date));
+
+  const today = todayStr();
+  const start = COMPETITION.start;
+  const dots = [];
+  let loggedCount = 0, totalSoFar = 0;
+
+  // Walk each competition day from the start up to (and including) today.
+  for (let i = 0; i < COMPETITION.durationDays; i++) {
+    const d = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
+    const key = dateKey(d);
+    if (key > today) break;            // don't show future days
+    totalSoFar++;
+    const logged = myDates.has(key);
+    if (logged) loggedCount++;
+    const isToday = key === today;
+    const cls = 'day-dot ' + (logged ? 'logged' : 'missed') + (isToday ? ' today' : '');
+    dots.push(`<div class="${cls}" title="${key}"></div>`);
+  }
+
+  if (totalSoFar === 0) {
+    el.innerHTML = '<div class="empty">The competition hasn\'t started yet.</div>';
+    return;
+  }
+
+  el.innerHTML =
+    `<div class="consistency-summary">You've logged <strong>${loggedCount}</strong> of ${totalSoFar} days so far</div>`
+    + `<div class="dot-grid">${dots.join('')}</div>`;
 }
 
 // Show whether the current user has logged today, so their status is clear.
