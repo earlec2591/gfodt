@@ -361,10 +361,16 @@
   .day-dot {
     width: 16px; height: 16px; border-radius: 50%;
     border: 1px solid var(--line); box-sizing: border-box;
+    cursor: pointer;
   }
   .day-dot.logged { background: var(--accent); border-color: var(--accent); }
   .day-dot.missed { background: transparent; border-color: var(--muted); }
   .day-dot.today  { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--accent); }
+  .day-dot.selected { transform: scale(1.35); }
+  .dot-detail {
+    text-align: center; font-size: 13px; color: var(--muted);
+    margin-top: 14px; min-height: 18px;
+  }
 
   /* ---- Rank movement ---- */
   .rank-move { font-size: 11px; font-weight: 700; font-family: var(--font-body); }
@@ -1260,6 +1266,8 @@ function displayTotal(metric, total) {
 // Tracks which person's row is expanded (null = none).
 let expandedName = null;
 let expandedFeedIdx = null;   // which feed row's point breakdown is open
+let selectedDot = null;        // which consistency dot's date is showing
+let selectedDotLabel = '';     // the text shown for the selected dot
 
 function renderBoard() {
   const board = document.getElementById('board');
@@ -1473,9 +1481,11 @@ function renderConsistency() {
     const logged = myDates.has(key);
     if (logged) loggedCount++;
     const isToday = key === today;
-    const cls = 'day-dot ' + (logged ? 'logged' : 'missed') + (isToday ? ' today' : '');
-    const label = shortDate(key) + (logged ? ' — logged' : (isToday ? ' — today, not logged yet' : ' — missed'));
-    dots.push(`<div class="${cls}" title="${label}"></div>`);
+    const selected = (selectedDot === key) ? ' selected' : '';
+    const cls = 'day-dot ' + (logged ? 'logged' : 'missed') + (isToday ? ' today' : '') + selected;
+    const status = logged ? 'logged' : (isToday ? 'today, not logged yet' : 'missed');
+    // Store the date + status on the dot so a tap can show it.
+    dots.push(`<div class="${cls}" data-dot-date="${key}" data-dot-status="${status}"></div>`);
   }
 
   if (totalSoFar === 0) {
@@ -1485,7 +1495,8 @@ function renderConsistency() {
 
   el.innerHTML =
     `<div class="consistency-summary">You've logged <strong>${loggedCount}</strong> of ${totalSoFar} days so far</div>`
-    + `<div class="dot-grid">${dots.join('')}</div>`;
+    + `<div class="dot-grid">${dots.join('')}</div>`
+    + `<div class="dot-detail" id="dotDetail">${selectedDotLabel || 'Tap a dot to see its date'}</div>`;
 }
 
 // Show whether the current user has logged today, so their status is clear.
@@ -1748,6 +1759,21 @@ document.getElementById('feed').addEventListener('click', (e) => {
   const idx = Number(row.dataset.feedIdx);
   expandedFeedIdx = (expandedFeedIdx === idx) ? null : idx;  // toggle
   renderFeed();
+});
+
+// Tap a consistency dot to show its date and status in the detail line.
+document.getElementById('consistency').addEventListener('click', (e) => {
+  const dot = e.target.closest('[data-dot-date]');
+  if (!dot) return;
+  const date = dot.dataset.dotDate;
+  if (selectedDot === date) {          // tapping the same dot again clears it
+    selectedDot = null;
+    selectedDotLabel = '';
+  } else {
+    selectedDot = date;
+    selectedDotLabel = shortDate(date) + ' — ' + dot.dataset.dotStatus;
+  }
+  renderConsistency();
 });
 
 // --- Chat wall handlers ---
