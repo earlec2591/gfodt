@@ -1474,7 +1474,8 @@ function renderConsistency() {
     if (logged) loggedCount++;
     const isToday = key === today;
     const cls = 'day-dot ' + (logged ? 'logged' : 'missed') + (isToday ? ' today' : '');
-    dots.push(`<div class="${cls}" title="${key}"></div>`);
+    const label = shortDate(key) + (logged ? ' — logged' : (isToday ? ' — today, not logged yet' : ' — missed'));
+    dots.push(`<div class="${cls}" title="${label}"></div>`);
   }
 
   if (totalSoFar === 0) {
