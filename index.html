@@ -357,7 +357,15 @@
   /* ---- Consistency dots ---- */
   .consistency-summary { font-size: 13px; color: var(--muted); margin-bottom: 12px; text-align: center; }
   .consistency-summary strong { color: var(--accent); }
-  .dot-grid { display: flex; flex-wrap: wrap; gap: 7px; justify-content: center; }
+  .dot-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 8px;
+    justify-content: center;
+    justify-items: center;
+    max-width: 220px;
+    margin: 0 auto;
+  }
   .day-dot {
     width: 16px; height: 16px; border-radius: 50%;
     border: 1px solid var(--line); box-sizing: border-box;
