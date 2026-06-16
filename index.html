@@ -350,7 +350,9 @@
   .weight-summary .ws-lab { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
   .weight-chart { width: 100%; height: auto; }
   .weight-chart .line { fill: none; stroke: var(--accent); stroke-width: 2; }
-  .weight-chart .dot { fill: var(--accent); }
+  .weight-chart .wpt-dot { fill: var(--accent); }
+  .weight-chart .wpt-dot.selected { r: 5; }
+  .weight-chart .wpt-hit { fill: transparent; cursor: pointer; }
   .weight-chart .axis { stroke: var(--line); stroke-width: 1; }
   .weight-chart .lbl { fill: var(--muted); font-size: 10px; font-family: var(--font-body); }
 
@@ -725,7 +727,7 @@
       <input type="text" id="chatInput" maxlength="280" placeholder="Say something…">
       <button id="chatSend">Post</button>
     </div>
-    <label class="blur-toggle"><input type="checkbox" id="chatBlur"> Post as a spoiler (blurred until tapped)</label>
+    <label class="blur-toggle"><input type="checkbox" id="chatBlur">Click to send an invisible message 😈</label>
     <div id="chatCount" class="chat-count"></div>
     <div id="chat"></div>
   </section>
@@ -1276,6 +1278,8 @@ let expandedName = null;
 let expandedFeedIdx = null;   // which feed row's point breakdown is open
 let selectedDot = null;        // which consistency dot's date is showing
 let selectedDotLabel = '';     // the text shown for the selected dot
+let selectedWeightDate = null; // which weight chart point is showing
+let selectedWeightLabel = '';  // the text shown for the selected weight point
 
 function renderBoard() {
   const board = document.getElementById('board');
@@ -1579,7 +1583,14 @@ function renderWeight() {
     const y = (v) => pad + (1 - (v - min) / range) * (H - pad * 2);
 
     const linePts = points.map((p, i) => `${x(i)},${y(p.value)}`).join(' ');
-    const dots = points.map((p, i) => `<circle class="dot" cx="${x(i)}" cy="${y(p.value)}" r="3"/>`).join('');
+    // Each point is a tappable circle carrying its date and value. A wider
+    // invisible hit-area makes them easy to tap, especially on phones.
+    const dots = points.map((p, i) => {
+      const sel = (selectedWeightDate === p.date) ? ' selected' : '';
+      return `<circle class="wpt-hit" cx="${x(i)}" cy="${y(p.value)}" r="10"
+                 data-wpt-date="${p.date}" data-wpt-val="${round1(p.value)}"/>
+              <circle class="wpt-dot${sel}" cx="${x(i)}" cy="${y(p.value)}" r="3"/>`;
+    }).join('');
 
     html += `
       <svg class="weight-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
@@ -1588,7 +1599,8 @@ function renderWeight() {
         ${dots}
         <text class="lbl" x="${pad}" y="${pad - 8}">${round1(max)} ${unit}</text>
         <text class="lbl" x="${pad}" y="${H - pad + 14}">${round1(min)} ${unit}</text>
-      </svg>`;
+      </svg>
+      <div class="dot-detail" id="weightDetail">${selectedWeightLabel || 'Tap a point to see its date'}</div>`;
   }
 
   el.innerHTML = html;
@@ -1784,6 +1796,21 @@ document.getElementById('consistency').addEventListener('click', (e) => {
   renderConsistency();
 });
 
+// Tap a weight chart point to show its date and weight.
+document.getElementById('weightTrend').addEventListener('click', (e) => {
+  const pt = e.target.closest('[data-wpt-date]');
+  if (!pt) return;
+  const date = pt.dataset.wptDate;
+  if (selectedWeightDate === date) {   // tapping the same point clears it
+    selectedWeightDate = null;
+    selectedWeightLabel = '';
+  } else {
+    selectedWeightDate = date;
+    selectedWeightLabel = shortDate(date) + ' — ' + pt.dataset.wptVal + ' ' + weightLabel();
+  }
+  renderWeight();
+});
+
 // --- Chat wall handlers ---
 const chatInput = document.getElementById('chatInput');
 const chatCount = document.getElementById('chatCount');
@@ -1822,11 +1849,11 @@ document.getElementById('chat').addEventListener('click', (e) => {
   if (revealedMsgs.has(id)) return;   // already revealed; ignore repeat taps
   revealedMsgs.add(id);
   renderChat();
-  // Re-blur after 30 seconds so spoilers don't stay open forever.
+  // Re-blur after 5 seconds so spoilers don't stay open forever.
   setTimeout(() => {
     revealedMsgs.delete(id);
     renderChat();
-  }, 30000);
+  }, 5000);
 });
 
 // Change water unit: update preference, save it, and refresh all displays.
