@@ -588,6 +588,7 @@
     <h1>Pick your name</h1>
     <p>This is how you'll show up on the leaderboard. Choose wisely — trash talk depends on it.</p>
     <input type="text" id="usernameInput" placeholder="e.g. SpeedDemon" maxlength="24" autocomplete="off">
+    <input type="text" id="joinCodeInput" placeholder="Join code" maxlength="40" autocomplete="off">
     <label class="signup-q"><input type="checkbox" id="tracksWorkouts"> I use a wearable or app to track my workouts</label>
     <label class="signup-q"><input type="checkbox" id="tracksSleep"> I use a wearable or app to track my sleep</label>
     <button id="usernameBtn">Save my name</button>
@@ -670,6 +671,8 @@
       <div class="field">
         <label for="nap">Nap (hours)</label>
         <input type="number" id="nap" min="0" step="0.5" placeholder="e.g. 1">
+        <label for="pushups">Push-ups</label>
+        <input type="number" id="pushups" min="0" step="1" placeholder="e.g. 30">
       </div>
 
       <div class="field">
@@ -727,7 +730,7 @@
       <input type="text" id="chatInput" maxlength="280" placeholder="Say something…">
       <button id="chatSend">Post</button>
     </div>
-    <label class="blur-toggle"><input type="checkbox" id="chatBlur">Click to send an invisible message 😈</label>
+    <label class="blur-toggle"><input type="checkbox" id="chatBlur"> Click to send an invisible message 😈</label>
     <div id="chatCount" class="chat-count"></div>
     <div id="chat"></div>
   </section>
@@ -886,7 +889,7 @@ async function saveMyUsername(user, username, tracksWorkouts, tracksSleep) {
   return error;   // null means success
 }
 
-// WRITE one entry. CUMULATIVE: workout minutes, water, steps, and nap hours
+// WRITE one entry. CUMULATIVE: workout minutes, water, and push-ups
 // ADD to whatever was already logged that day; sleep and weight REPLACE (latest
 // value wins). So people can log activity in chunks throughout the day and the
 // totals build up. We read the existing row first, then combine.
@@ -899,10 +902,9 @@ async function addEntry(entry) {
 
   // Read any existing entry for this day so we can add to it.
   const { data: existing } = await db.from('entries')
-    .select('minutes, water_ml, steps, nap_hours, sleep_hours, workout_log')
+    .select('minutes, water_ml, steps, pushups, sleep_hours, workout_log')
     .eq('user_id', user.id).eq('entry_date', entry.date).maybeSingle();
 
-  const prev = existing || { minutes: 0, water_ml: 0, steps: 0, nap_hours: 0, sleep_hours: 0, workout_log: '' };
 
   // Sleep REPLACES (latest value wins) — but only if the person actually entered
   // one. A blank sleep field must NOT wipe a previously logged value, so we keep
@@ -930,7 +932,7 @@ async function addEntry(entry) {
     minutes:      (Number(prev.minutes)   || 0) + (Number(entry.minutes) || 0),   // ADD
     water_ml:     (Number(prev.water_ml)  || 0) + (Number(entry.waterMl) || 0),   // ADD
     steps:        newSteps,                                       // REPLACE only if entered
-    nap_hours:    (Number(prev.nap_hours) || 0) + (Number(entry.nap)     || 0),   // ADD
+    pushups:      (Number(prev.pushups)   || 0) + (Number(entry.pushups) || 0),   // ADD
     sleep_hours:  newSleep,                                       // REPLACE only if entered
   };
   combined.hit_10k = combined.steps >= 10000;                    // keep old column in sync
@@ -984,7 +986,7 @@ async function loadEntries() {
     water:       row.water_ml,     // canonical ml (convert for display)
     sleep:       row.sleep_hours,
     steps:       row.steps,        // raw step count (number)
-    nap:         row.nap_hours,    // nap hours logged that day
+    pushups:     row.pushups,      // push-ups logged that day
     workoutLog:  row.workout_log,  // running text list of workout segments
     createdAt:   row.created_at,
     updatedAt:   row.updated_at || row.created_at,   // when last logged/changed
@@ -1065,26 +1067,29 @@ const POINTS = {
   perWorkoutMinute: 0.1,      // 10 min = 1 pt
   perWaterMl:       0.0021133785,   // exactly 16 oz = 1 pt
   perSleepHour:     1,        // 1 hour = 1 pt
-  perNapHour:       0.5,      // 1 hour of napping = 0.5 pt
-  stepsBase:        5,        // points for reaching 10,000 steps
-  stepsPerExtra5k:  2,        // bonus points for each full 5,000 beyond 10k
+  perPushup:        0.2,      // 10 push-ups = 2 pts
+  stepsBase:         5,      // points for reaching the 10,000 threshold
+  stepsThreshold:    10000,  // minimum steps to score anything
+  stepsBonusBlock:   2000,   // bonus awarded for each full block of this many extra steps
+  stepsPerBonusBlock: 2,     // points per bonus block
   weightLogged:     3,        // points for logging weight that day (the HABIT, not the number)
 };
 
-// Steps points: 0 under 10k; 5 at 10k; +2 for each full 5k above 10k.
-// e.g. 10k→5, 15k→7, 20k→9, 22k→9 (only full 5k blocks count).
+// Steps points: 0 below the threshold; base points at the threshold; then a
+// bonus for each full bonus-block beyond it.
+// e.g. 10k→5, 12k→7, 14k→9, 20k→15 (only full blocks count).
 function stepsPoints(steps) {
   const s = Number(steps) || 0;
-  if (s < 10000) return 0;
-  const extraBlocks = Math.floor((s - 10000) / 5000);
-  return POINTS.stepsBase + extraBlocks * POINTS.stepsPerExtra5k;
+  if (s < POINTS.stepsThreshold) return 0;
+  const extraBlocks = Math.floor((s - POINTS.stepsThreshold) / POINTS.stepsBonusBlock);
+  return POINTS.stepsBase + extraBlocks * POINTS.stepsPerBonusBlock;
 }
 
 function scoreEntry(e) {
   return (Number(e.minutes) || 0) * POINTS.perWorkoutMinute
        + (Number(e.water)   || 0) * POINTS.perWaterMl      // water stored in ml
        + (Number(e.sleep)   || 0) * POINTS.perSleepHour
-       + (Number(e.nap)     || 0) * POINTS.perNapHour
+       + (Number(e.pushups) || 0) * POINTS.perPushup
        + stepsPoints(e.steps)
        + (e.loggedWeight ? POINTS.weightLogged : 0);       // habit points, not the number
 }
@@ -1096,7 +1101,7 @@ function scoreBreakdown(e) {
     { label: 'Workout', pts: (Number(e.minutes) || 0) * POINTS.perWorkoutMinute },
     { label: 'Water',   pts: (Number(e.water)   || 0) * POINTS.perWaterMl },
     { label: 'Sleep',   pts: (Number(e.sleep)   || 0) * POINTS.perSleepHour },
-    { label: 'Nap',     pts: (Number(e.nap)     || 0) * POINTS.perNapHour },
+    { label: 'Push-ups', pts: (Number(e.pushups) || 0) * POINTS.perPushup },
     { label: 'Steps',   pts: stepsPoints(e.steps) },
     { label: 'Weight logged', pts: e.loggedWeight ? POINTS.weightLogged : 0 },
   ];
@@ -1199,7 +1204,7 @@ function getPersonStats(name) {
     minutes:    sum('minutes'),
     waterMl:    sum('water'),                       // canonical ml
     sleep:      sum('sleep'),
-    nap:        sum('nap'),
+    pushups:    sum('pushups'),
     steps:      sum('steps'),                        // total steps
     tenKDays:   mine.filter(e => (Number(e.steps) || 0) >= 10000).length,
     streak:     getStreak(name),
@@ -1356,8 +1361,8 @@ function renderScoring() {
     { what: 'Workout time', pts: `1 point per ${Math.round(1 / POINTS.perWorkoutMinute)} minutes` },
     { what: 'Water',        pts: `1 point per ${userUnitsPerPoint} ${waterLabel()}` },
     { what: 'Sleep',        pts: `${POINTS.perSleepHour} point per hour` },
-    { what: 'Nap',          pts: `${POINTS.perNapHour} point per hour` },
-    { what: 'Steps',        pts: `${POINTS.stepsBase} pts at 10k, +${POINTS.stepsPerExtra5k} per extra 5k` },
+    { what: 'Push-ups',     pts: `${Math.round(10 * POINTS.perPushup)} pts per 10 push-ups` },
+    { what: 'Steps',        pts: `${POINTS.stepsBase} pts at ${(POINTS.stepsThreshold/1000)}k, +${POINTS.stepsPerBonusBlock} per extra ${(POINTS.stepsBonusBlock/1000)}k` },
     { what: 'Logging weight', pts: `${POINTS.weightLogged} points for logging (private)` },
   ];
 
@@ -1409,6 +1414,7 @@ function renderFeed() {
       bits.push(`${wDisp}${waterLabel()} water`);
     }
     if (e.sleep)   bits.push(`${e.sleep}h sleep`);
+    if (Number(e.pushups) > 0) bits.push(`${e.pushups} push-ups`);
     const what = bits.join(' · ') || 'logged a day';
     const pts = Math.round(scoreEntry(e));   // points earned by this single entry
 
@@ -1651,11 +1657,21 @@ function escapeHtml(str) {
 ================================================================== */
 
 const COMPETITION = {
-  start: new Date(2026, 5, 7, 0, 0, 0),  // June 7 2026, local midnight (month 5 = June)
+  start: new Date(2026, 6, 12, 0, 0, 0),  // July 12 2026, local midnight (month 6 = July)
   durationDays: 28,
 };
-// End = start + 30 days. Computed, not hand-typed, so the two can never disagree.
+// End = start + duration. Computed, not hand-typed, so the two can never disagree.
 COMPETITION.end = new Date(COMPETITION.start.getTime() + COMPETITION.durationDays * 24 * 60 * 60 * 1000);
+
+// Join code, lightly obscured (base64) so a casual "view source" doesn't reveal
+// it in plain text. NOTE: this is NOT real security — anyone who decodes it can
+// see it. It just makes joining deliberate for a friendly, private challenge.
+// To change the code: run btoa('yourNewCode') in a browser console and paste the result.
+const JOIN_CODE_ENCODED = 'Z2ZvZHQyMDI2';  // decodes to the current join code
+function joinCodeOk(entered) {
+  try { return (entered || '').trim() === atob(JOIN_CODE_ENCODED); }
+  catch { return false; }
+}
 
 // Break a millisecond gap into days / hours / minutes / seconds.
 function breakdown(ms) {
@@ -1734,9 +1750,9 @@ dateInput.addEventListener('change', () => {
     summary.innerHTML = `Already logged for ${picked}: `
       + `${mine.workoutLog ? escapeHtml(mine.workoutLog) + ' · ' : ''}`
       + `${mine.minutes || 0} min total · ${w}${waterLabel()} water · ${(mine.steps||0).toLocaleString()} steps`
-      + `${mine.nap ? ' · ' + mine.nap + 'h nap' : ''}`
+      + `${mine.pushups ? ' · ' + mine.pushups + ' push-ups' : ''}`
       + `${mine.sleep ? ' · ' + mine.sleep + 'h sleep' : ''}`
-      + `. <strong>Minutes, water, and nap add on; sleep and steps update to your newest number.</strong>`;
+      + `. <strong>Minutes, water, and push-ups add on; sleep and steps update to your newest number.</strong>`;
     if (entryEditable(picked)) deleteBtn.style.display = 'block';
   }
 });
@@ -1748,7 +1764,7 @@ document.getElementById('deleteBtn').addEventListener('click', async () => {
   const err = await deleteEntry(picked);
   if (err) { alert(err); return; }
   // Clear the form and hide the button.
-  ['minutes','water','sleep','nap','steps','weight'].forEach(id => document.getElementById(id).value = '');
+  ['minutes','water','sleep','pushups','steps','weight'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('deleteBtn').style.display = 'none';
 });
 
@@ -1849,7 +1865,7 @@ document.getElementById('chat').addEventListener('click', (e) => {
   if (revealedMsgs.has(id)) return;   // already revealed; ignore repeat taps
   revealedMsgs.add(id);
   renderChat();
-  // Re-blur after 5 seconds so spoilers don't stay open forever.
+  // Re-blur after 30 seconds so spoilers don't stay open forever.
   setTimeout(() => {
     revealedMsgs.delete(id);
     renderChat();
@@ -1886,7 +1902,7 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
     minutes:     Number(document.getElementById('minutes').value) || 0,
     waterMl:     waterToMl(document.getElementById('water').value),  // convert to canonical ml
     sleep:       Number(document.getElementById('sleep').value) || 0,
-    nap:         Number(document.getElementById('nap').value) || 0,
+    pushups:     Number(document.getElementById('pushups').value) || 0,
     steps:       Number(document.getElementById('steps').value) || 0,
   });
 
@@ -1906,7 +1922,7 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
   document.getElementById('minutes').value = '';
   document.getElementById('water').value = '';
   document.getElementById('sleep').value = '';
-  document.getElementById('nap').value = '';
+  document.getElementById('pushups').value = '';
   document.getElementById('steps').value = '';
   document.getElementById('weight').value = '';
 
@@ -1962,6 +1978,11 @@ document.getElementById('usernameBtn').addEventListener('click', async () => {
   const msg = document.getElementById('usernameMsg');
   const name = document.getElementById('usernameInput').value.trim();
   if (name.length < 2) { msg.textContent = 'Pick at least 2 characters.'; return; }
+
+  // Check the join code before letting anyone in. (Lightweight gate, not real
+  // security — see JOIN_CODE_ENCODED note.)
+  const code = document.getElementById('joinCodeInput').value;
+  if (!joinCodeOk(code)) { msg.textContent = 'That join code isn\'t right. Ask whoever invited you.'; return; }
 
   const { data: { user } } = await db.auth.getUser();
   if (!user) { showScreen('gate'); return; }
